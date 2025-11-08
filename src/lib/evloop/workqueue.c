@@ -824,6 +824,13 @@ replyqueue_free_(replyqueue_t *queue)
     workqueue_entry_free(work);
   }
 
+  /* We get here from replyqueue_new() too, on the path where
+   * alert_sockets_create() failed. It leaves the struct as we allocated it,
+   * and a zeroed read_fd is descriptor 0, so only close what was opened:
+   * alert_fn is set on every success path and on none of the failures. */
+  if (queue->alert.alert_fn)
+    alert_sockets_close(&queue->alert);
+
   tor_free(queue);
 }
 
