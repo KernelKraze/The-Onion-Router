@@ -489,7 +489,7 @@ threadpool_queue_work_priority(threadpool_t *pool,
 
   TOR_TAILQ_INSERT_TAIL(&pool->work[prio], ent, next_work);
 
-  tor_cond_signal_all(&pool->condition);
+  tor_cond_signal_one(&pool->condition);
 
   tor_mutex_release(&pool->lock);
 
