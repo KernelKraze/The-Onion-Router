@@ -187,7 +187,7 @@ static int pretty_fn_has_parens = 0;
  * bail out early from log_debug if we aren't debugging.
  * Uses atomic operations for thread-safe access without locking. */
 #ifdef HAVE_WORKING_STDATOMIC
-atomic_int log_global_min_severity_;
+atomic_int log_global_min_severity_ = LOG_NOTICE;
 #else
 int log_global_min_severity_ = LOG_NOTICE;
 #endif
@@ -948,9 +948,6 @@ init_logging(int disable_startup_queue)
     tor_bug_init_counter();
     log_mutex_initialized = 1;
   }
-#ifdef HAVE_WORKING_STDATOMIC
-  atomic_init(&log_global_min_severity_, LOG_NOTICE);
-#endif
 #ifdef __GNUC__
   if (strchr(__PRETTY_FUNCTION__, '(')) {
     pretty_fn_has_parens = 1;
