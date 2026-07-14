@@ -948,9 +948,6 @@ init_logging(int disable_startup_queue)
     tor_bug_init_counter();
     log_mutex_initialized = 1;
   }
-#ifdef HAVE_WORKING_STDATOMIC
-  atomic_init(&log_global_min_severity_, LOG_NOTICE);
-#endif
 #ifdef __GNUC__
   if (strchr(__PRETTY_FUNCTION__, '(')) {
     pretty_fn_has_parens = 1;
