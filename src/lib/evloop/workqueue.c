@@ -32,11 +32,9 @@
 
 #include "lib/crypt_ops/crypto_rand.h"
 #include "lib/crypt_ops/crypto_init.h"
-#include "lib/crypt_ops/compat_openssl.h"
 
 #ifdef ENABLE_OPENSSL
 #include <openssl/crypto.h>
-#include <openssl/rand.h>
 #endif
 #include "lib/intmath/weakrng.h"
 #include "lib/log/ratelim.h"
@@ -50,8 +48,7 @@
 #include "ext/tor_queue.h"
 #include <event2/event.h>
 #include <string.h>
-#include <errno.h>
-#include <unistd.h>
+
 #define WORKQUEUE_PRIORITY_FIRST WQ_PRI_HIGH
 #define WORKQUEUE_PRIORITY_LAST WQ_PRI_LOW
 #define WORKQUEUE_N_PRIORITIES (((int) WORKQUEUE_PRIORITY_LAST)+1)
