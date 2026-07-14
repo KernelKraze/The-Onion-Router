@@ -1,0 +1,5 @@
+  o Major bugfixes (threading):
+    - Fix a race where the main thread could proceed with cleanup
+      before worker threads finished exiting, causing crashes when
+      workers tried to acquire already-freed mutexes. Fixes bug 41148;
+      bugfix on 0.4.8.18.
