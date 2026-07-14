@@ -105,6 +105,10 @@ struct threadpool_t {
   tor_cond_t workers_finished;
   /** Number of worker threads currently running. */
   int n_workers_running;
+  /** Number of worker threads spawned and not yet exited. Unlike
+   * n_workers_running, this also counts threads that have not reached
+   * their startup registration yet, so shutdown cannot miss them. */
+  int n_workers_alive;
 };
 
 /** Used to put a workqueue_priority_t value into a bitfield. */
@@ -384,6 +388,7 @@ exit:
   /* Signal on every exit to avoid lost wakeups. */
   tor_mutex_acquire(&pool->control_lock);
   pool->n_workers_running--;
+  pool->n_workers_alive--;
 
   log_debug(LD_GENERAL, "Worker thread exited. %d/%u remaining [TID: %lu].",
             pool->n_workers_running, pool->n_threads_max,
@@ -600,12 +605,23 @@ threadpool_start_threads(threadpool_t *pool, int n)
     int32_t chance = (pool->n_threads & 1) ? CHANCE_STRICT : CHANCE_PERMISSIVE;
 
     void *state = pool->new_thread_state_fn(pool->new_thread_state_arg);
+
+    /* Count the thread as alive before spawning it, so that a thread
+     * which starts but has not registered itself yet is already visible
+     * to the shutdown wait in threadpool_stop_threads(). */
+    tor_mutex_acquire(&pool->control_lock);
+    pool->n_workers_alive++;
+    tor_mutex_release(&pool->control_lock);
+
     workerthread_t *thr = workerthread_new(chance,
                                            state, pool, pool->reply_queue);
 
     if (!thr) {
       //LCOV_EXCL_START
       tor_assert_nonfatal_unreached();
+      tor_mutex_acquire(&pool->control_lock);
+      pool->n_workers_alive--;
+      tor_mutex_release(&pool->control_lock);
       pool->free_thread_state_fn(state);
       status = -1;
       tor_mutex_release(&pool->lock);
@@ -687,9 +703,9 @@ threadpool_stop_threads(threadpool_t *pool)
 
   tor_mutex_acquire(&pool->control_lock);
 
-  while (pool->n_workers_running > 0) {
+  while (pool->n_workers_alive > 0) {
     log_debug(LD_GENERAL, "Waiting for %d worker threads to exit...",
-              pool->n_workers_running);
+              pool->n_workers_alive);
     tor_cond_wait(&pool->workers_finished, &pool->control_lock, NULL);
   }
 
@@ -720,6 +736,7 @@ threadpool_new(int n_threads,
   tor_cond_init(&pool->workers_finished);
   pool->exit = 0;
   pool->n_workers_running = 0;
+  pool->n_workers_alive = 0;
 
   unsigned i;
   for (i = WORKQUEUE_PRIORITY_FIRST; i <= WORKQUEUE_PRIORITY_LAST; ++i) {
