@@ -1,0 +1,14 @@
+  o Major bugfixes (threading):
+    - Fix race condition where main thread could proceed with cleanup
+      before worker threads finished exiting, causing crashes when
+      workers tried to acquire already-freed mutexes. Fixes bug 41148;
+      bugfix on 0.4.8.18-dev.
+    - Pre-initialize RSA and AES OpenSSL providers before spawning
+      worker threads to prevent undefined behavior under concurrent
+      first-use on OpenSSL 3.x. Fixes bug 41148;
+      bugfix on 0.4.8.18-dev.
+    - Use atomic operations for thread-safe log severity checking to
+      prevent data races when worker threads log during configuration
+      changes, and fix dropped early log messages caused by
+      uninitialized atomic state. Fixes bug 41148;
+      bugfix on 0.4.8.18-dev.
