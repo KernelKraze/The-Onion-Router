@@ -16,6 +16,7 @@
 
 #include "lib/crypt_ops/crypto_init.h"
 
+#include "lib/crypt_ops/crypto_cipher.h"
 #include "lib/crypt_ops/crypto_curve25519.h"
 #include "lib/crypt_ops/crypto_dh.h"
 #include "lib/crypt_ops/crypto_ed25519.h"
@@ -120,6 +121,19 @@ crypto_global_init(int useAccel, const char *accelName, const char *accelDir)
         }
         crypto_pk_free(warmup_key);
       }
+
+      unsigned char dummy_key[32] = {0};
+      unsigned char dummy_iv[16] = {0};
+      crypto_cipher_t *cipher;
+
+      cipher = crypto_cipher_new_with_iv_and_bits(dummy_key, dummy_iv, 128);
+      crypto_cipher_free(cipher);
+
+      cipher = crypto_cipher_new_with_iv_and_bits(dummy_key, dummy_iv, 192);
+      crypto_cipher_free(cipher);
+
+      cipher = crypto_cipher_new_with_iv_and_bits(dummy_key, dummy_iv, 256);
+      crypto_cipher_free(cipher);
     }
 #endif /* OPENSSL_VERSION_NUMBER >= 0x30000000L */
 #else
