@@ -1,0 +1,7 @@
+  o Major bugfixes (worker threads):
+    - Fix a type-confusion crash when freeing a thread pool: the whole
+      update-argument array was passed to the free function as if it
+      were a single argument, so an update left unconsumed at shutdown
+      could send a bogus pointer into the onion-key free path. Also
+      free work items still queued at shutdown, which were previously
+      leaked. Fixes bug 41209; bugfix on 0.4.8.13.

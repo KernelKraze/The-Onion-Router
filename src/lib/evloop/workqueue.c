@@ -771,11 +771,26 @@ threadpool_free_(threadpool_t *pool)
   }
 
   if (pool->update_args) {
-    if (!pool->free_update_arg_fn)
+    if (!pool->free_update_arg_fn) {
       log_warn(LD_GENERAL, "Freeing pool->update_args not possible. "
                            "pool->free_update_arg_fn is not set.");
-    else
-      pool->free_update_arg_fn(pool->update_args);
+    } else {
+      for (int i = 0; i < pool->n_threads; ++i) {
+        if (pool->update_args[i])
+          pool->free_update_arg_fn(pool->update_args[i]);
+      }
+    }
+    tor_free(pool->update_args);
+  }
+
+  for (unsigned i = WORKQUEUE_PRIORITY_FIRST;
+       i <= WORKQUEUE_PRIORITY_LAST; ++i) {
+    workqueue_entry_t *work;
+    while (!TOR_TAILQ_EMPTY(&pool->work[i])) {
+      work = TOR_TAILQ_FIRST(&pool->work[i]);
+      TOR_TAILQ_REMOVE(&pool->work[i], work, next_work);
+      workqueue_entry_free(work);
+    }
   }
 
   if (pool->reply_event) {
