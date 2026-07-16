@@ -116,7 +116,9 @@ jobs:
           ./configure --disable-asciidoc --disable-gcc-hardening
 
       - name: Build workqueue test
-        run: make src/test/test_workqueue
+        run: |
+          make micro-revision.i
+          make src/test/test_workqueue
 
       - name: Run under TSan
         env:
@@ -201,13 +203,16 @@ jobs:
           msystem: MINGW64
           update: false
           install: >-
-            base-devel autotools
+            base-devel autotools autoconf2.71
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-openssl
             mingw-w64-x86_64-zlib
       - name: Configure and build
+        # autoconf 2.73 rejects tor's configure.ac; pin 2.71
+        env:
+          WANT_AUTOCONF: "2.71"
         run: |
-          ./autogen.sh
+          autoreconf-2.71 -if || autoreconf -if
           ./configure --disable-asciidoc --enable-fatal-warnings
           make
