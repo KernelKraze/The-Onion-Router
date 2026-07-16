@@ -1,7 +1,11 @@
 /* Repro for tor#41148 and shutdown lost-wakeup.
- * argv[1] == "idle": let workers drain and go idle before freeing the pool
- * (pure #41148 static-residue path). Default: free while workers are busy
- * (lost-wakeup path). */
+ * argv[1] == "idle":   let workers drain and go idle before freeing the
+ *                      pool (pure #41148 static-residue path).
+ * argv[1] == "update": queue a per-thread update while workers are busy,
+ *                      then free immediately, so some update args are
+ *                      still pending when threadpool_free_() runs (the
+ *                      #41209 update_args cleanup path).
+ * Default: free while workers are busy (lost-wakeup path). */
 #include "orconfig.h"
 #include <stdio.h>
 #include <string.h>
@@ -34,10 +38,34 @@ reply_fn(void *arg)
   (void)arg;
 }
 
+/* Update plumbing: a consumed update arg is freed by update_fn (that is
+ * the ownership convention); an unconsumed one must be freed by
+ * threadpool_free_() through free_update_arg(). Leak checkers verify
+ * that both paths fire exactly once per arg. */
+static void *
+dup_update_arg(void *arg)
+{
+  (void)arg;
+  return tor_malloc_zero(32);
+}
+static workqueue_reply_t
+update_fn(void *state, void *arg)
+{
+  (void)state;
+  tor_free(arg);
+  return WQ_RPL_REPLY;
+}
+static void
+free_update_arg(void *arg)
+{
+  tor_free(arg);
+}
+
 int
 main(int argc, char **argv)
 {
   int idle = (argc > 1 && !strcmp(argv[1], "idle"));
+  int update = (argc > 1 && !strcmp(argv[1], "update"));
   init_logging(1);
   if (crypto_global_init(0, NULL, NULL) < 0)
     return 2;
@@ -48,6 +76,13 @@ main(int argc, char **argv)
     if (!tp) { printf("iter %d: threadpool_new failed\n", iter); return 2; }
     for (int i = 0; i < 200; i++)
       threadpool_queue_work(tp, work_fn, reply_fn, NULL);
+    if (update) {
+      if (threadpool_queue_update(tp, dup_update_arg, update_fn,
+                                  free_update_arg, NULL) < 0) {
+        printf("iter %d: queue_update failed\n", iter);
+        return 2;
+      }
+    }
     if (idle)
       tor_sleep_msec(200);
     threadpool_free(tp);
