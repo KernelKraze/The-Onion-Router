@@ -1,0 +1,6 @@
+  o Minor bugfixes (worker threads, memory):
+    - Free each worker thread's state object when the thread exits at
+      pool shutdown. Previously the states (for cpuworker, including
+      the server onion keys) leaked every time a thread pool was
+      destroyed, which accumulates in applications that restart tor
+      in-process. Fixes part of bug 41090; bugfix on 0.4.8.13.
