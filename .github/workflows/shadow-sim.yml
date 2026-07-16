@@ -19,7 +19,7 @@ on:
 
 env:
   # Pin shadow to a release tag. Bump deliberately, never track master.
-  SHADOW_VERSION: v3.2.0
+  SHADOW_VERSION: v3.3.0
   BASE_REF: ${{ github.event.inputs.base_ref || 'main' }}
   SCALE: ${{ github.event.inputs.network_scale || '0.002' }}
   SIM_TIME: ${{ github.event.inputs.sim_time || '15 minutes' }}
