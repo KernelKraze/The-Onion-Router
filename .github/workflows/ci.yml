@@ -88,6 +88,7 @@ jobs:
           # perl alarm: macOS runners have no timeout(1)
           perl -e 'alarm 120; exec @ARGV' ./repro
           perl -e 'alarm 120; exec @ARGV' ./repro idle
+          perl -e 'alarm 120; exec @ARGV' ./repro update
 
       - name: Upload test logs on failure
         if: failure()
@@ -154,6 +155,7 @@ jobs:
             -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
           timeout 300 ./repro
           timeout 300 ./repro idle
+          timeout 300 ./repro update
 
   asan-workqueue:
     name: ASan/UBSan workqueue
@@ -198,6 +200,7 @@ jobs:
             -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
           timeout 300 ./repro
           timeout 300 ./repro idle
+          timeout 300 ./repro update
 
   windows-mingw:
     name: Windows mingw64 (build only)
