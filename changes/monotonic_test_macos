@@ -1,0 +1,5 @@
+  o Testing:
+    - Relax monotonic time 32-bit coarse diff test bounds on macOS.
+      Fixes a unit test failure on Apple Silicon where mach_timebase
+      numer/denom of 125/3 causes right-shift precision loss exceeding
+      the previous 1% tolerance. Bugfix on 0.3.4.1-alpha.
