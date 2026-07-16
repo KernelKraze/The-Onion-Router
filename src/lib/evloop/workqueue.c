@@ -319,7 +319,7 @@ worker_thread_main(void *thread_)
   while (1) {
     /* Exit thread when signaled to exit */
     if (pool->exit)
-      goto exit;
+      goto exit_free_state;
 
     /* lock must be held at this point. */
     while (worker_thread_has_work(thread)) {
@@ -368,12 +368,22 @@ worker_thread_main(void *thread_)
     /* An exit signal sent while this thread was busy in a work function
      * had no waiter and is gone; recheck the flag before sleeping. */
     if (pool->exit)
-      goto exit;
+      goto exit_free_state;
 
     /* Okay. Now, wait till somebody has work for us. */
     if (tor_cond_wait(&pool->condition, &pool->lock, NULL) < 0) {
       log_warn(LD_GENERAL, "Fail tor_cond_wait.");
     }
+  }
+
+exit_free_state:
+  /* A worker stopped by the pool's exit flag still owns its state; free
+   * it here. A worker exiting because a work or update function returned
+   * non-REPLY skips this: by convention that function has taken ownership
+   * of the state (see workqueue_do_shutdown() in test_workqueue.c). */
+  if (pool->free_thread_state_fn && thread->state) {
+    pool->free_thread_state_fn(thread->state);
+    thread->state = NULL;
   }
 
 exit:
