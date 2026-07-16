@@ -6713,9 +6713,19 @@ test_util_monotonic_time_add_msec(void *arg)
   monotime_coarse_add_msec(&ct2, &ct1, 1337);
   tt_i64_op(monotime_diff_msec(&t1, &t2), OP_EQ, 1337);
   tt_i64_op(monotime_coarse_diff_msec(&ct1, &ct2), OP_EQ, 1337);
-  // The 32-bit variant must be within 1% of the regular one.
+  /* The _msec32 variant quantizes with a fixed >>20 shift to avoid a
+   * 64-bit division. Its wall-clock quantum is 2^20 abstime ticks,
+   * which is ~1ms where one tick is a nanosecond, but ~44ms on Apple
+   * silicon where the mach timebase is 125/3 -- up to ~3% on these
+   * sub-second intervals. Widen the bound on that platform only; every
+   * other platform keeps the tight check. */
+#if defined(__APPLE__) && defined(__aarch64__)
+  tt_int_op(monotime_coarse_diff_msec32_(&ct1, &ct2), OP_GT, 1290);
+  tt_int_op(monotime_coarse_diff_msec32_(&ct1, &ct2), OP_LT, 1390);
+#else
   tt_int_op(monotime_coarse_diff_msec32_(&ct1, &ct2), OP_GT, 1323);
   tt_int_op(monotime_coarse_diff_msec32_(&ct1, &ct2), OP_LT, 1350);
+#endif
 
   /* Add 1337 msec twice more; make sure that any second rollover issues
    * worked. */
@@ -6725,8 +6735,13 @@ test_util_monotonic_time_add_msec(void *arg)
   monotime_coarse_add_msec(&ct2, &ct2, 1337);
   tt_i64_op(monotime_diff_msec(&t1, &t2), OP_EQ, 1337*3);
   tt_i64_op(monotime_coarse_diff_msec(&ct1, &ct2), OP_EQ, 1337*3);
+#if defined(__APPLE__) && defined(__aarch64__)
+  tt_int_op(monotime_coarse_diff_msec32_(&ct1, &ct2), OP_GT, 3960);
+  tt_int_op(monotime_coarse_diff_msec32_(&ct1, &ct2), OP_LT, 4070);
+#else
   tt_int_op(monotime_coarse_diff_msec32_(&ct1, &ct2), OP_GT, 3970);
   tt_int_op(monotime_coarse_diff_msec32_(&ct1, &ct2), OP_LT, 4051);
+#endif
 
  done:
   ;

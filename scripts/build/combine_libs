@@ -30,11 +30,15 @@ for input in "$@"; do
     dir="$TMPDIR"/$(basename "$input" .a)
     mkdir "$dir"
     cd "$dir" >/dev/null
-    "${AR:-ar}" x "$abs"
+    ar x "$abs"
 done
 
 cd "$TMPDIR" >/dev/null
 apple_symdef_fix
-"${AR:-ar}" "${ARFLAGS:-cru}" library.tmp.a ./*/**
-"${RANLIB:-ranlib}" library.tmp.a
+if [ "$(uname -s)" = "Darwin" ]; then
+  libtool -static -o library.tmp.a ./*/**
+else
+  "${AR:-ar}" "${ARFLAGS:-cru}" library.tmp.a ./*/**
+  "${RANLIB:-ranlib}" library.tmp.a
+fi
 mv -f library.tmp.a "$TARGET"
