@@ -58,13 +58,18 @@ jobs:
         run: make check
 
       - name: Workqueue alert-mechanism variants
+        # exit 77 is the automake skip code (eventfd/pipe2 on macOS)
         run: |
           ./src/test/test_workqueue
           ./src/test/test_workqueue -T 16
           for v in pipe socketpair pipe2 efd efd2; do
-            sh "src/test/test_workqueue_${v}.sh" || exit 1
+            rc=0
+            sh "src/test/test_workqueue_${v}.sh" || rc=$?
+            if [ "$rc" -ne 0 ] && [ "$rc" -ne 77 ]; then
+              echo "variant $v failed rc=$rc"
+              exit 1
+            fi
           done
-        # eventfd/pipe2 variants self-skip (exit 77) on macOS
 
       - name: Shutdown-race reproducer (41148)
         run: |
@@ -127,7 +132,12 @@ jobs:
           ./src/test/test_workqueue
           ./src/test/test_workqueue -T 16
           for v in pipe socketpair pipe2 efd efd2; do
-            sh "src/test/test_workqueue_${v}.sh" || exit 1
+            rc=0
+            sh "src/test/test_workqueue_${v}.sh" || rc=$?
+            if [ "$rc" -ne 0 ] && [ "$rc" -ne 77 ]; then
+              echo "variant $v failed rc=$rc"
+              exit 1
+            fi
           done
 
       - name: Reproducer under TSan
