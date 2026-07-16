@@ -85,8 +85,9 @@ jobs:
           fi
           ${{ matrix.cc }} -o repro repro.o src/test/libtor-testing.a \
             $LDD -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
-          timeout 120 ./repro
-          timeout 120 ./repro idle
+          # perl alarm: macOS runners have no timeout(1)
+          perl -e 'alarm 120; exec @ARGV' ./repro
+          perl -e 'alarm 120; exec @ARGV' ./repro idle
 
       - name: Upload test logs on failure
         if: failure()
