@@ -1,0 +1,213 @@
+name: CI
+
+on:
+  push:
+    branches: ['ci/**', 'refactor/**']
+  workflow_dispatch:
+
+env:
+  MAKEFLAGS: -j4
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }} / ${{ matrix.cc }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            cc: gcc
+          - os: ubuntu-24.04
+            cc: clang
+          - os: macos-14
+            cc: clang
+          - os: macos-15
+            cc: clang
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential automake autoconf \
+            libtool pkg-config libevent-dev libssl-dev zlib1g-dev \
+            liblzma-dev libzstd-dev python3
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install automake autoconf libtool libevent openssl@3 xz zstd pkg-config
+
+      - name: Configure
+        run: |
+          ./autogen.sh
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            CC=${{ matrix.cc }} ./configure --enable-fatal-warnings --disable-asciidoc \
+              --with-openssl-dir="$(brew --prefix openssl@3)" \
+              --with-libevent-dir="$(brew --prefix libevent)"
+          else
+            CC=${{ matrix.cc }} ./configure --enable-fatal-warnings --disable-asciidoc
+          fi
+
+      - name: Build
+        run: make
+
+      - name: Unit tests
+        run: make check
+
+      - name: Workqueue alert-mechanism variants
+        run: |
+          ./src/test/test_workqueue
+          ./src/test/test_workqueue -T 16
+          for v in pipe socketpair pipe2 efd efd2; do
+            sh "src/test/test_workqueue_${v}.sh" || exit 1
+          done
+        # eventfd/pipe2 variants self-skip (exit 77) on macOS
+
+      - name: Shutdown-race reproducer (41148)
+        run: |
+          ${{ matrix.cc }} -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS -O2 \
+            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
+            -I./src/ext/equix/hashx/include \
+            $(pkg-config --cflags libevent openssl 2>/dev/null) \
+            -c scripts/ci/repro_41148.c -o repro.o
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            LDD="-L$(brew --prefix libevent)/lib -L$(brew --prefix openssl@3)/lib -L$(brew --prefix xz)/lib -L$(brew --prefix zstd)/lib"
+          else
+            LDD=""
+          fi
+          ${{ matrix.cc }} -o repro repro.o src/test/libtor-testing.a \
+            $LDD -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
+          timeout 120 ./repro
+          timeout 120 ./repro idle
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.os }}-${{ matrix.cc }}
+          path: |
+            test-suite.log
+            config.log
+          retention-days: 7
+
+  tsan-workqueue:
+    name: TSan workqueue
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential automake autoconf \
+            libtool pkg-config libevent-dev libssl-dev zlib1g-dev \
+            liblzma-dev libzstd-dev clang
+
+      - name: Configure with ThreadSanitizer
+        run: |
+          ./autogen.sh
+          CC=clang \
+          CFLAGS="-fsanitize=thread -O1 -g -fno-omit-frame-pointer" \
+          LDFLAGS="-fsanitize=thread" \
+          ./configure --disable-asciidoc --disable-gcc-hardening
+
+      - name: Build workqueue test
+        run: make src/test/test_workqueue
+
+      - name: Run under TSan
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          ./src/test/test_workqueue
+          ./src/test/test_workqueue -T 16
+          for v in pipe socketpair pipe2 efd efd2; do
+            sh "src/test/test_workqueue_${v}.sh" || exit 1
+          done
+
+      - name: Reproducer under TSan
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          clang -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS \
+            -fsanitize=thread -O1 -g \
+            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
+            -I./src/ext/equix/hashx/include \
+            -c scripts/ci/repro_41148.c -o repro.o
+          clang -fsanitize=thread -o repro repro.o src/test/libtor-testing.a \
+            -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
+          timeout 300 ./repro
+          timeout 300 ./repro idle
+
+  asan-workqueue:
+    name: ASan/UBSan workqueue
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential automake autoconf \
+            libtool pkg-config libevent-dev libssl-dev zlib1g-dev \
+            liblzma-dev libzstd-dev clang
+
+      - name: Configure with fragile hardening
+        run: |
+          ./autogen.sh
+          CC=clang ./configure --enable-fragile-hardening --disable-asciidoc
+
+      - name: Build
+        run: make
+
+      - name: Unit tests under ASan
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: ./src/test/test
+
+      - name: Workqueue and reproducer under ASan with leak check
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+        run: |
+          ./src/test/test_workqueue
+          ./src/test/test_workqueue -T 16
+          clang -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS \
+            -fsanitize=address,undefined -O1 -g \
+            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
+            -I./src/ext/equix/hashx/include \
+            -c scripts/ci/repro_41148.c -o repro.o
+          clang -fsanitize=address,undefined -o repro repro.o \
+            src/test/libtor-testing.a \
+            -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
+          timeout 300 ./repro
+          timeout 300 ./repro idle
+
+  windows-mingw:
+    name: Windows mingw64 (build only)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    continue-on-error: true
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            base-devel autotools
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-libevent
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-zlib
+      - name: Configure and build
+        run: |
+          ./autogen.sh
+          ./configure --disable-asciidoc --enable-fatal-warnings
+          make

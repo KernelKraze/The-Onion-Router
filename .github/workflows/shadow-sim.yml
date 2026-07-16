@@ -1,0 +1,223 @@
+name: Shadow network simulation
+
+# Full-network A/B simulation. Heavy job: run on demand or weekly,
+# never on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Baseline ref to compare against
+        default: main
+      network_scale:
+        description: Fraction of the real Tor network to model
+        default: "0.002"
+      sim_time:
+        description: Simulated duration
+        default: "15 minutes"
+  schedule:
+    - cron: '0 2 * * 6'
+
+env:
+  # Pin shadow to a release tag. Bump deliberately, never track master.
+  SHADOW_VERSION: v3.2.0
+  BASE_REF: ${{ github.event.inputs.base_ref || 'main' }}
+  SCALE: ${{ github.event.inputs.network_scale || '0.002' }}
+  SIM_TIME: ${{ github.event.inputs.sim_time || '15 minutes' }}
+
+jobs:
+  simulate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Checkout patched tree
+        uses: actions/checkout@v4
+        with:
+          path: tor-patched
+
+      - name: Checkout baseline tree
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_REF }}
+          path: tor-baseline
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential automake autoconf \
+            libtool pkg-config libevent-dev libssl-dev zlib1g-dev \
+            cmake libglib2.0-dev libigraph-dev netbase python3-venv \
+            python3-networkx xz-utils util-linux faketime dstat procps \
+            python3-matplotlib python3-scipy python3-numpy wget
+
+      - name: Restore shadow build cache
+        id: shadow-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local
+          key: shadow-${{ env.SHADOW_VERSION }}-${{ runner.os }}-ubuntu24
+
+      - name: Build shadow (cache miss only)
+        if: steps.shadow-cache.outputs.cache-hit != 'true'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --default-toolchain stable
+          source "$HOME/.cargo/env"
+          git clone --depth 1 --branch "$SHADOW_VERSION" \
+            https://github.com/shadow/shadow.git
+          cd shadow
+          ./setup build --clean --prefix="$HOME/.local" -j"$(nproc)"
+          ./setup install
+          cd ..
+          git clone --depth 1 https://github.com/shadow/tgen.git
+          cmake -S tgen -B tgen/build -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+          make -C tgen/build -j"$(nproc)" install
+          git clone --depth 1 https://github.com/shadow/oniontrace.git
+          cmake -S oniontrace -B oniontrace/build -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+          make -C oniontrace/build -j"$(nproc)" install
+
+      - name: Add shadow to PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build both tor binaries
+        run: |
+          for tree in tor-baseline tor-patched; do
+            cd "$tree"
+            ./autogen.sh
+            ./configure --disable-asciidoc
+            make -j"$(nproc)"
+            cd ..
+          done
+          # Neutral swap directory: tornettools bakes the tor path it finds
+          # at generate time into shadow.config.yaml. Generating against
+          # this directory lets us swap the binary without regenerating.
+          mkdir -p "$HOME/tor-active"
+          cp tor-baseline/src/app/tor "$HOME/tor-active/tor"
+          cp tor-baseline/src/tools/tor-gencert "$HOME/tor-active/tor-gencert"
+          echo "$HOME/tor-active" >> "$GITHUB_PATH"
+
+      - name: Install tornettools
+        run: |
+          git clone --depth 1 https://github.com/shadow/tornettools.git
+          python3 -m venv toolsenv
+          . toolsenv/bin/activate
+          pip install -q 'numpy<2.0'
+          pip install -q -r tornettools/requirements.txt
+          pip install -q 'tgentools @ git+https://github.com/shadow/tgen.git#subdirectory=tools'
+          pip install -q 'oniontracetools @ git+https://github.com/shadow/oniontrace.git#subdirectory=tools'
+          pip install -q ./tornettools
+
+      - name: Restore staged network data cache
+        id: stage-cache
+        uses: actions/cache@v4
+        with:
+          path: staged
+          key: tornettools-staged-2023-04-v1
+
+      - name: Stage network data (cache miss only)
+        if: steps.stage-cache.outputs.cache-hit != 'true'
+        run: |
+          . toolsenv/bin/activate
+          wget -q https://collector.torproject.org/archive/relay-descriptors/consensuses/consensuses-2023-04.tar.xz
+          wget -q https://collector.torproject.org/archive/relay-descriptors/server-descriptors/server-descriptors-2023-04.tar.xz
+          wget -q https://metrics.torproject.org/userstats-relay-country.csv
+          wget -q https://collector.torproject.org/archive/onionperf/onionperf-2023-04.tar.xz
+          wget -q -O bandwidth-2023-04.csv "https://metrics.torproject.org/bandwidth.csv?start=2023-04-01&end=2023-04-30"
+          tar xaf consensuses-2023-04.tar.xz
+          tar xaf server-descriptors-2023-04.tar.xz
+          tar xaf onionperf-2023-04.tar.xz
+          git clone --depth 1 https://github.com/tmodel-ccs2018/tmodel-ccs2018.github.io.git
+          tornettools stage \
+            consensuses-2023-04 \
+            server-descriptors-2023-04 \
+            userstats-relay-country.csv \
+            tmodel-ccs2018.github.io \
+            --onionperf_data_path onionperf-2023-04 \
+            --bandwidth_data_path bandwidth-2023-04.csv \
+            --geoip_path tor-baseline/src/config/geoip
+          mkdir -p staged
+          mv relayinfo_staging_* userinfo_staging_* networkinfo_staging.gml staged/
+          cp -r tmodel-ccs2018.github.io staged/
+
+      - name: Generate network
+        run: |
+          . toolsenv/bin/activate
+          tornettools generate \
+            staged/relayinfo_staging_2023-04-01--2023-04-30.json \
+            staged/userinfo_staging_2023-04-01--2023-04-30.json \
+            staged/networkinfo_staging.gml \
+            staged/tmodel-ccs2018.github.io \
+            --network_scale "$SCALE" \
+            --prefix tornet
+          python3 - "$SIM_TIME" <<'EOF'
+          import sys, yaml
+          with open("tornet/shadow.config.yaml") as f:
+              cfg = yaml.safe_load(f)
+          cfg.setdefault("host_option_defaults", {})
+          cfg["host_option_defaults"]["pcap_enabled"] = False
+          cfg["general"]["stop_time"] = sys.argv[1]
+          import os
+          cfg["general"]["parallelism"] = os.cpu_count()
+          with open("tornet/shadow.config.yaml", "w") as f:
+              yaml.dump(cfg, f, sort_keys=False)
+          EOF
+
+      - name: Run baseline simulation
+        run: |
+          cp -r tornet tornet-patched
+          cd tornet
+          /usr/bin/time -v shadow shadow.config.yaml > shadow.stdout 2> shadow.time
+          tail -5 shadow.time
+
+      - name: Run patched simulation (same runner, same network)
+        run: |
+          cp tor-patched/src/app/tor "$HOME/tor-active/tor"
+          cd tornet-patched
+          /usr/bin/time -v shadow shadow.config.yaml > shadow.stdout 2> shadow.time
+          tail -5 shadow.time
+
+      - name: Check for tor errors in both simulations
+        run: |
+          status=0
+          for net in tornet tornet-patched; do
+            errs=$(grep -rl --include='*.log' '\[err\]' "$net/shadow.data/hosts" | head -5 || true)
+            bugs=$(grep -rh --include='*.log' 'Bug:' "$net/shadow.data/hosts" | sort -u | head -10 || true)
+            if [ -n "$errs" ] || [ -n "$bugs" ]; then
+              echo "$net: tor errors detected"
+              echo "$errs"
+              echo "$bugs"
+              status=1
+            else
+              echo "$net: no tor errors"
+            fi
+          done
+          exit $status
+
+      - name: Parse simulated performance
+        run: |
+          . toolsenv/bin/activate
+          tornettools parse tornet
+          tornettools parse tornet-patched
+          tornettools plot tornet tornet-patched \
+            --tor_metrics_path staged/tmodel-ccs2018.github.io 2>/dev/null || \
+            tornettools plot tornet tornet-patched || true
+
+      - name: Reduce artifacts to essentials
+        if: always()
+        run: |
+          for net in tornet tornet-patched; do
+            mkdir -p "results/$net"
+            cp "$net"/shadow.time "results/$net/" 2>/dev/null || true
+            cp -r "$net"/tornettools.parse.log "$net"/*.json \
+              "results/$net/" 2>/dev/null || true
+            grep -rh 'error\|panic' "$net/shadow.data/shadow.log" 2>/dev/null | \
+              head -50 > "results/$net/shadow-errors.txt" || true
+          done
+          cp -r pdfs results/ 2>/dev/null || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-sim-results
+          path: results/
+          retention-days: 14
