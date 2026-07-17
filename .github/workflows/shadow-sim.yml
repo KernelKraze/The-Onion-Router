@@ -87,13 +87,13 @@ jobs:
             make -j"$(nproc)"
             cd ..
           done
-          # Neutral swap directory: tornettools bakes the tor path it finds
-          # at generate time into shadow.config.yaml. Generating against
-          # this directory lets us swap the binary without regenerating.
-          mkdir -p "$HOME/tor-active"
-          cp tor-baseline/src/app/tor "$HOME/tor-active/tor"
-          cp tor-baseline/src/tools/tor-gencert "$HOME/tor-active/tor-gencert"
-          echo "$HOME/tor-active" >> "$GITHUB_PATH"
+          # tornettools bakes ~/.local/bin/tor into shadow.config.yaml (its
+          # standard install convention), so the binaries must live there.
+          # Overwriting that file between runs swaps the binary without
+          # regenerating the network.
+          mkdir -p "$HOME/.local/bin"
+          cp tor-baseline/src/app/tor "$HOME/.local/bin/tor"
+          cp tor-baseline/src/tools/tor-gencert "$HOME/.local/bin/tor-gencert"
 
       - name: Install tornettools
         run: |
@@ -170,7 +170,7 @@ jobs:
 
       - name: Run patched simulation (same runner, same network)
         run: |
-          cp tor-patched/src/app/tor "$HOME/tor-active/tor"
+          cp tor-patched/src/app/tor "$HOME/.local/bin/tor"
           cd tornet-patched
           /usr/bin/time -v shadow shadow.config.yaml > shadow.stdout 2> shadow.time
           tail -5 shadow.time
