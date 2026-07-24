@@ -35,9 +35,9 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
-#ifdef HAVE_FCNTL_H
+/* fcntl.h is available on all supported platforms including mingw64;
+ * include unconditionally so O_WRONLY/O_CREAT/O_BINARY are always declared. */
 #include <fcntl.h>
-#endif
 
 #ifdef _WIN32
 #include <io.h>
