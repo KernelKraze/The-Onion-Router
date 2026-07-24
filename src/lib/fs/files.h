@@ -29,7 +29,7 @@
 #endif
 #endif /* defined(_WIN32) */
 
-#if HAVE_FCNTL_H
+#ifdef HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
 
