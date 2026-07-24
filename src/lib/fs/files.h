@@ -29,9 +29,12 @@
 #endif
 #endif /* defined(_WIN32) */
 
-#ifdef HAVE_FCNTL_H
+/* fcntl.h is available on all supported platforms including mingw64.
+ * Include unconditionally: OPEN_FLAGS_* macros below expand O_WRONLY,
+ * O_CREAT etc. at the call site, so these symbols must be declared in
+ * every translation unit that includes this header. HAVE_FCNTL_H is not
+ * reliably set on mingw64 even though the header exists. */
 #include <fcntl.h>
-#endif
 
 #ifndef O_BINARY
 #define O_BINARY 0
