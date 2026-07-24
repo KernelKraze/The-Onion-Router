@@ -70,6 +70,14 @@ TOR_UTIL_LIBS = \
 	src/lib/libtor-ctime.a \
 	src/lib/libtor-metrics.a
 
+if WIN32
+TOR_UTIL_LIBS_GROUPED = $(TOR_UTIL_LIBS) src/lib/libtor-thread.a src/lib/libtor-log.a
+TOR_UTIL_TESTING_LIBS_GROUPED = $(TOR_UTIL_TESTING_LIBS) src/lib/libtor-thread-testing.a src/lib/libtor-log-testing.a
+else
+TOR_UTIL_LIBS_GROUPED = $(TOR_UTIL_LIBS)
+TOR_UTIL_TESTING_LIBS_GROUPED = $(TOR_UTIL_TESTING_LIBS)
+endif
+
 # Variants of the above for linking the testing variant of tor (for coverage
 # and tests)
 if UNITTESTS_ENABLED

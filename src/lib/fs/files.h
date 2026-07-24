@@ -53,6 +53,7 @@ FILE *tor_fopen_cloexec(const char *path, const char *mode);
 int tor_rename(const char *path_old, const char *path_new);
 
 int replace_file(const char *from, const char *to);
+int tor_utime(const char *fname);
 int touch_file(const char *fname);
 
 MOCK_DECL(int,tor_unlink,(const char *pathname));

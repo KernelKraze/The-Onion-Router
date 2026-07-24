@@ -35,6 +35,9 @@
 #ifdef HAVE_UTIME_H
 #include <utime.h>
 #endif
+#ifdef _WIN32
+#include <sys/utime.h>
+#endif
 #ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
 #endif
@@ -138,11 +141,23 @@ replace_file(const char *from, const char *to)
 #endif /* !defined(_WIN32) */
 }
 
+/** Set the mtime of <b>fname</b> to the current time.
+ * Returns 0 on success, -1 on failure. */
+int
+tor_utime(const char *fname)
+{
+#if defined(_WIN32) && defined(_MSC_VER)
+  return _utime(fname, NULL);
+#else
+  return utime(fname, NULL);
+#endif
+}
+
 /** Change <b>fname</b>'s modification time to now. */
 int
 touch_file(const char *fname)
 {
-  if (utime(fname, NULL)!=0)
+  if (tor_utime(fname)!=0)
     return -1;
   return 0;
 }

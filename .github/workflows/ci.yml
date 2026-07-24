@@ -4,7 +4,7 @@ on:
   push:
     branches: ['ci/**', 'refactor/**']
   pull_request:
-    branches: ['main']
+    branches: ['ci/**', 'refactor/**']
   workflow_dispatch:
 
 env:

@@ -8,7 +8,7 @@ src_tools_tor_resolve_SOURCES = src/tools/tor-resolve.c
 src_tools_tor_resolve_LDFLAGS = @TOR_LDFLAGS_openssl@
 src_tools_tor_resolve_LDADD = \
 	src/trunnel/libor-trunnel.a \
-	$(TOR_UTIL_LIBS) \
+	$(TOR_UTIL_LIBS_GROUPED) \
 	$(TOR_CRYPTO_LIBS) $(TOR_LIBS_CRYPTLIB)\
 	@TOR_LIB_MATH@ @TOR_LIB_WS32@ @TOR_LIB_IPHLPAPI@ @TOR_LIB_SHLWAPI@ @TOR_LIB_USERENV@
 
@@ -19,7 +19,7 @@ src_tools_tor_cov_resolve_CFLAGS = $(AM_CFLAGS) $(TEST_CFLAGS)
 src_tools_tor_cov_resolve_LDFLAGS = @TOR_LDFLAGS_openssl@
 src_tools_tor_cov_resolve_LDADD = \
 	src/trunnel/libor-trunnel.a \
-	$(TOR_UTIL_TESTING_LIBS) \
+	$(TOR_UTIL_TESTING_LIBS_GROUPED) \
 	$(TOR_CRYPTO_TESTING_LIBS) $(TOR_LIBS_CRYPTLIB) \
 	@TOR_LIB_MATH@ @TOR_LIB_WS32@
 endif

@@ -4,6 +4,9 @@
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
+#ifdef _WIN32
+#include <sys/utime.h>
+#endif
 #define COMPAT_TIME_PRIVATE
 #define UTIL_MALLOC_PRIVATE
 #define PROCESS_WIN32_PRIVATE
@@ -3541,7 +3544,7 @@ test_util_sscanf(void *arg)
 #define tt_ci_char_op(a,op,b) \
   tt_char_op(TOR_TOLOWER((int)a),op,TOR_TOLOWER((int)b))
 
-#ifndef HAVE_STRNLEN
+#if !defined(HAVE_STRNLEN) && !defined(_WIN32)
 static size_t
 strnlen(const char *s, size_t len)
 {
