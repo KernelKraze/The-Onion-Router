@@ -316,7 +316,7 @@ jobs:
           retention-days: 30
 
   publish-pre-release:
-    if: github.event_name == 'push' && github.ref_name == 'ci/github-actions'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/ci/github-actions'
     needs: [build-test, tsan-workqueue, asan-workqueue, windows-mingw, raspberry-pi]
     runs-on: ubuntu-24.04
     permissions:
