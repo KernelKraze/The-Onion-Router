@@ -20,6 +20,7 @@
 /* Provide str(n)casecmp wrappers only for MSVC-style Windows builds.
  * mingw64 already declares these in <string.h>. */
 #if defined(_WIN32) && defined(_MSC_VER)
+#include <string.h>
 #ifndef HAVE_STRNCASECMP
 static inline int strncasecmp(const char *a, const char *b, size_t n);
 static inline int strncasecmp(const char *a, const char *b, size_t n) {
