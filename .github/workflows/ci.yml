@@ -278,28 +278,11 @@ jobs:
           cp src/app/tor.exe src/app/tor-production-windows-mingw64.exe
           strip src/app/tor-production-windows-mingw64.exe 2>/dev/null || :
 
-      - name: Build hardened (debug) binary
-        env:
-          WANT_AUTOCONF: "2.71"
-        run: |
-          make clean
-          ./configure --disable-asciidoc --enable-fatal-warnings \
-            --enable-fragile-hardening
-          make
-          cp src/app/tor.exe src/app/tor-debug-windows-mingw64.exe
-
       - name: Upload production artifact
         uses: actions/upload-artifact@v4
         with:
           name: tor-windows-mingw64-production
           path: src/app/tor-production-windows-mingw64.exe
-          retention-days: 30
-
-      - name: Upload debug artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tor-windows-mingw64-debug
-          path: src/app/tor-debug-windows-mingw64.exe
           retention-days: 30
 
   raspberry-pi:
