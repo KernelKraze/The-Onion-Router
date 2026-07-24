@@ -100,6 +100,43 @@ jobs:
             config.log
           retention-days: 7
 
+      - name: Prepare production binary
+        run: |
+          plat="${{ matrix.os }}-${{ matrix.cc }}"
+          cp src/app/tor "src/app/tor-production-${plat}"
+          strip "src/app/tor-production-${plat}" 2>/dev/null || :
+
+      - name: Build hardened (debug) binary
+        run: |
+          make clean
+          ./autogen.sh
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            CC=${{ matrix.cc }} ./configure --enable-fatal-warnings \
+              --enable-fragile-hardening --disable-asciidoc \
+              --with-openssl-dir="$(brew --prefix openssl@3)" \
+              --with-libevent-dir="$(brew --prefix libevent)"
+          else
+            CC=${{ matrix.cc }} ./configure --enable-fatal-warnings \
+              --enable-fragile-hardening --disable-asciidoc
+          fi
+          make -j4 src/app/tor
+          plat="${{ matrix.os }}-${{ matrix.cc }}"
+          cp src/app/tor "src/app/tor-debug-${plat}"
+
+      - name: Upload production artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tor-${{ matrix.os }}-${{ matrix.cc }}-production
+          path: src/app/tor-production-${{ matrix.os }}-${{ matrix.cc }}
+          retention-days: 30
+
+      - name: Upload debug artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tor-${{ matrix.os }}-${{ matrix.cc }}-debug
+          path: src/app/tor-debug-${{ matrix.os }}-${{ matrix.cc }}
+          retention-days: 30
+
   tsan-workqueue:
     name: TSan workqueue
     runs-on: ubuntu-24.04
@@ -230,3 +267,85 @@ jobs:
           autoreconf-2.71 -if || autoreconf -if
           ./configure --disable-asciidoc --enable-fatal-warnings
           make
+
+  raspberry-pi:
+    name: Raspberry Pi aarch64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build inside arm64 Ubuntu container
+        run: |
+          docker run --platform linux/arm64 --rm -v $PWD:/work -w /work \
+            arm64v8/ubuntu:24.04 bash -c "
+            set -e
+            apt-get update -q
+            apt-get install -y -q build-essential automake autoconf \
+              libtool pkg-config libevent-dev libssl-dev zlib1g-dev \
+              liblzma-dev libzstd-dev
+            ./autogen.sh
+            ./configure --disable-asciidoc
+            make -j4 src/app/tor
+            cp src/app/tor src/app/tor-production-raspberry-pi-aarch64
+            strip src/app/tor-production-raspberry-pi-aarch64
+            make clean
+            ./configure --enable-fragile-hardening --disable-asciidoc
+            make -j4 src/app/tor
+            cp src/app/tor src/app/tor-debug-raspberry-pi-aarch64
+            "
+
+      - name: Upload production artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tor-raspberry-pi-aarch64-production
+          path: src/app/tor-production-raspberry-pi-aarch64
+          retention-days: 30
+
+      - name: Upload debug artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tor-raspberry-pi-aarch64-debug
+          path: src/app/tor-debug-raspberry-pi-aarch64
+          retention-days: 30
+
+  publish-pre-release:
+    if: github.ref_name == 'ci/github-actions'
+    needs: [build-test, tsan-workqueue, asan-workqueue, windows-mingw, raspberry-pi]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate release tag
+        run: echo "RELEASE_TAG=0.4.8.18-dev.$(date +%Y%m%d.%H%M%S)" >> $GITHUB_ENV
+
+      - name: Create pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          make_latest: false
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "Pre-release ${{ env.RELEASE_TAG }}"
+          body: |
+            Automated pre-release from ci/github-actions branch.
+
+            Includes production (stripped, optimized) and debug (fragile-hardening, with symbols) builds for:
+            - Ubuntu 22.04 (gcc)
+            - Ubuntu 24.04 (clang)
+            - macOS 14 (clang)
+            - macOS 15 (clang)
+            - Raspberry Pi aarch64 (QEMU arm64 container)
+            - Windows mingw64 (build only)
+
+            Naming: `<platform>-<cc>-[production|debug]`
+          files: artifacts/*
+          fail_on_unmatched_files: false
