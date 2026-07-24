@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: ['ci/**', 'refactor/**']
+  pull_request:
+    branches: ['ci/**', 'refactor/**']
   workflow_dispatch:
 
 env:
@@ -314,7 +316,7 @@ jobs:
           retention-days: 30
 
   publish-pre-release:
-    if: github.ref_name == 'ci/github-actions'
+    if: github.event_name == 'push' && github.ref_name == 'ci/github-actions'
     needs: [build-test, tsan-workqueue, asan-workqueue, windows-mingw, raspberry-pi]
     runs-on: ubuntu-24.04
     permissions:
