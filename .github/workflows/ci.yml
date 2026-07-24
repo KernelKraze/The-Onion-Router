@@ -1,5 +1,8 @@
 name: CI
 
+# ⚠️ Found a bug? Please open an issue at
+#    https://github.com/KernelKraze/The-Onion-Router/issues
+
 on:
   push:
     branches: ['ci/**', 'refactor/**']
@@ -242,7 +245,7 @@ jobs:
           timeout 300 ./repro update
 
   windows-mingw:
-    name: Windows mingw64 (build only)
+    name: Windows mingw64
     runs-on: windows-2022
     timeout-minutes: 60
     continue-on-error: true
@@ -269,6 +272,35 @@ jobs:
           autoreconf-2.71 -if || autoreconf -if
           ./configure --disable-asciidoc --enable-fatal-warnings
           make
+
+      - name: Prepare production binary
+        run: |
+          cp src/app/tor.exe src/app/tor-production-windows-mingw64.exe
+          strip src/app/tor-production-windows-mingw64.exe 2>/dev/null || :
+
+      - name: Build hardened (debug) binary
+        env:
+          WANT_AUTOCONF: "2.71"
+        run: |
+          make clean
+          ./configure --disable-asciidoc --enable-fatal-warnings \
+            --enable-fragile-hardening
+          make
+          cp src/app/tor.exe src/app/tor-debug-windows-mingw64.exe
+
+      - name: Upload production artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tor-windows-mingw64-production
+          path: src/app/tor-production-windows-mingw64.exe
+          retention-days: 30
+
+      - name: Upload debug artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tor-windows-mingw64-debug
+          path: src/app/tor-debug-windows-mingw64.exe
+          retention-days: 30
 
   raspberry-pi:
     name: Raspberry Pi aarch64
@@ -346,7 +378,7 @@ jobs:
             - macOS 14 (clang)
             - macOS 15 (clang)
             - Raspberry Pi aarch64 (QEMU arm64 container)
-            - Windows mingw64 (build only)
+            - Windows mingw64
 
             Naming: `<platform>-<cc>-[production|debug]`
           files: artifacts/*
