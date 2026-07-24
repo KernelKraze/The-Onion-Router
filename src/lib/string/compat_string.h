@@ -17,9 +17,9 @@
 #include <stddef.h>
 
 /* ===== String compatibility */
-#ifdef _WIN32
-/* Windows doesn't have str(n)casecmp, but mingw defines it: only define it
- * ourselves if it's missing. */
+/* Provide str(n)casecmp wrappers only for MSVC-style Windows builds.
+ * mingw64 already declares these in <string.h>. */
+#if defined(_WIN32) && defined(_MSC_VER)
 #ifndef HAVE_STRNCASECMP
 static inline int strncasecmp(const char *a, const char *b, size_t n);
 static inline int strncasecmp(const char *a, const char *b, size_t n) {
@@ -32,7 +32,7 @@ static inline int strcasecmp(const char *a, const char *b) {
   return _stricmp(a,b);
 }
 #endif /* !defined(HAVE_STRCASECMP) */
-#endif /* defined(_WIN32) */
+#endif /* defined(_WIN32) && defined(_MSC_VER) */
 
 #if defined __APPLE__
 /* On OSX 10.9 and later, the overlap-checking code for strlcat would
