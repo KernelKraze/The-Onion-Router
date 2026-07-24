@@ -697,66 +697,65 @@ fi
 AM_CONDITIONAL(THREADS_WIN32, test "$bwin32" = "true")
 AM_CONDITIONAL(THREADS_PTHREADS, test "$bwin32" = "false")
 
-AC_CHECK_FUNCS(
-	_NSGetEnviron \
-	RtlSecureZeroMemory \
-	SecureZeroMemory \
-	accept4 \
-	backtrace \
-	backtrace_symbols_fd \
-	eventfd \
-	explicit_bzero \
-	timingsafe_memcmp \
-	flock \
-	fsync \
-	ftime \
-	get_current_dir_name \
-	getaddrinfo \
-	getdelim \
-	getifaddrs \
-	getline \
-	getrlimit \
-	gettimeofday \
-	gmtime_r \
-	gnu_get_libc_version \
-	inet_aton \
-	ioctl \
-	issetugid \
-	llround \
-	localtime_r \
-	lround \
-	madvise \
-	memmem \
-	memset_s \
-	minherit \
-	mmap \
-	pipe \
-	pipe2 \
-	prctl \
-	readpassphrase \
-	rint \
-	sigaction \
-	snprintf \
-	socketpair \
-	statvfs \
-	strncasecmp \
-	strcasecmp \
-	strlcat \
-	strlcpy \
-	strnlen \
-	strptime \
-	strtok_r \
-	strtoull \
-	sysconf \
-	sysctl \
-        timegm \
-	truncate \
-	uname \
-	usleep \
-	vasprintf \
-	_vscprintf \
+AC_CHECK_FUNCS([_NSGetEnviron
+	RtlSecureZeroMemory
+	SecureZeroMemory
+	accept4
+	backtrace
+	backtrace_symbols_fd
+	eventfd
+	explicit_bzero
+	timingsafe_memcmp
+	flock
+	fsync
+	ftime
+	get_current_dir_name
+	getaddrinfo
+	getdelim
+	getifaddrs
+	getline
+	getrlimit
+	gettimeofday
+	gmtime_r
+	gnu_get_libc_version
+	inet_aton
+	ioctl
+	issetugid
+	llround
+	localtime_r
+	lround
+	madvise
+	memmem
+	memset_s
+	minherit
+	mmap
+	pipe
+	pipe2
+	prctl
+	readpassphrase
+	rint
+	sigaction
+	snprintf
+	socketpair
+	statvfs
+	strncasecmp
+	strcasecmp
+	strlcat
+	strlcpy
+	strnlen
+	strptime
+	strtok_r
+	strtoull
+	sysconf
+	sysctl
+        timegm
+	truncate
+	uname
+	usleep
+	vasprintf
+	_vscprintf
 	vsnprintf
-)
+])
 
 # Apple messed up when they added some functions: they
 # forgot to decorate them with appropriate AVAILABLE_MAC_OS_VERSION
@@ -782,9 +781,8 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
    [on_macos_pre_10_10=yes; AC_MSG_RESULT([yes])])
 
 if test "$on_macos_pre_10_10" = "no"; then
-  AC_CHECK_FUNCS(
-        mach_approximate_time \
-  )
+  AC_CHECK_FUNCS([mach_approximate_time
+  ])
 fi
 
 # We should only probe for these functions if we are sure that we
@@ -807,10 +805,9 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
    [on_macos_pre_10_12=yes; AC_MSG_RESULT([yes])])
 
 if test "$on_macos_pre_10_12" = "no"; then
-  AC_CHECK_FUNCS(
-        clock_gettime \
-        getentropy \
-  )
+  AC_CHECK_FUNCS([clock_gettime
+        getentropy
+  ])
 fi
 
 if test "$bwin32" != "true"; then
@@ -939,10 +936,9 @@ else
 fi
 
 dnl Now check for particular libevent functions.
-AC_CHECK_FUNCS([evutil_secure_rng_set_urandom_device_file \
-                evutil_secure_rng_add_bytes \
-                evdns_base_get_nameserver_addr \
-
+AC_CHECK_FUNCS([evutil_secure_rng_set_urandom_device_file
+                evutil_secure_rng_add_bytes
+                evdns_base_get_nameserver_addr
 ])
 
 LIBS="$save_LIBS"
@@ -1164,10 +1160,9 @@ dnl OpenSSL functions which we might not have.  In theory, we could just
 dnl check the openssl version number, but in practice that gets pretty
 dnl confusing with LibreSSL, OpenSSL, and various distributions' patches
 dnl to them.
-AC_CHECK_FUNCS([ \
-		EVP_PBE_scrypt \
-		SSL_CTX_set_security_level \
-		SSL_set_ciphersuites
+AC_CHECK_FUNCS([EVP_PBE_scrypt
+                SSL_CTX_set_security_level
+                SSL_set_ciphersuites
 ])
 
 fi # enable_nss
@@ -1310,8 +1305,8 @@ if test "x$have_zstd" = "xyes"; then
     save_CFLAGS="$CFLAGS"
     LIBS="$LIBS $ZSTD_LIBS"
     CFLAGS="$CFLAGS $ZSTD_CFLAGS"
-    AC_CHECK_FUNCS(ZSTD_estimateCStreamSize \
-                   ZSTD_estimateDCtxSize)
+    AC_CHECK_FUNCS([ZSTD_estimateCStreamSize
+                    ZSTD_estimateDCtxSize])
     LIBS="$save_LIBS"
     CFLAGS="$save_CFLAGS"
 fi
@@ -1587,7 +1582,7 @@ AC_CACHE_CHECK([whether we can use curve25519-donna-c64],
           [tor_cv_can_use_curve25519_donna_c64=cross],
       [tor_cv_can_use_curve25519_donna_c64=no])])])
 
-AC_CHECK_HEADERS([crypto_scalarmult_curve25519.h \
+AC_CHECK_HEADERS([crypto_scalarmult_curve25519.h
                   nacl/crypto_scalarmult_curve25519.h])
 
 AC_CACHE_CHECK([for nacl compiled with a fast curve25519 implementation],
@@ -1641,57 +1636,57 @@ AC_SUBST(CURVE25519_LIBS)
 dnl Make sure to enable support for large off_t if available.
 AC_SYS_LARGEFILE
 
-AC_CHECK_HEADERS([errno.h \
-		  fcntl.h \
-		  signal.h \
-		  string.h \
-		  sys/capability.h \
-		  sys/fcntl.h \
-		  sys/stat.h \
-		  sys/time.h \
-		  sys/types.h \
-		  time.h \
-		  unistd.h \
-		  arpa/inet.h \
-		  crt_externs.h \
-		  execinfo.h \
-		  gnu/libc-version.h \
-		  grp.h \
-		  ifaddrs.h \
-		  inttypes.h \
-		  limits.h \
-		  linux/types.h \
-		  mach/vm_inherit.h \
-		  machine/limits.h \
-		  malloc.h \
-		  netdb.h \
-		  netinet/in.h \
-		  netinet/in6.h \
-		  pwd.h \
-		  readpassphrase.h \
-		  stdatomic.h \
-		  sys/eventfd.h \
-		  sys/file.h \
-		  sys/ioctl.h \
-		  sys/limits.h \
-		  sys/mman.h \
-		  sys/param.h \
-		  sys/prctl.h \
-		  sys/random.h \
-		  sys/resource.h \
-		  sys/select.h \
-		  sys/socket.h \
-		  sys/statvfs.h \
-		  sys/syscall.h \
-		  sys/sysctl.h \
-		  sys/time.h \
-		  sys/types.h \
-		  sys/un.h \
-		  sys/utime.h \
-		  sys/wait.h \
-		  syslog.h \
-		  utime.h \
-		  glob.h])
+AC_CHECK_HEADERS([errno.h
+                  fcntl.h
+                  signal.h
+                  string.h
+                  sys/capability.h
+                  sys/fcntl.h
+                  sys/stat.h
+                  sys/time.h
+                  sys/types.h
+                  time.h
+                  unistd.h
+                  arpa/inet.h
+                  crt_externs.h
+                  execinfo.h
+                  gnu/libc-version.h
+                  grp.h
+                  ifaddrs.h
+                  inttypes.h
+                  limits.h
+                  linux/types.h
+                  mach/vm_inherit.h
+                  machine/limits.h
+                  malloc.h
+                  netdb.h
+                  netinet/in.h
+                  netinet/in6.h
+                  pwd.h
+                  readpassphrase.h
+                  stdatomic.h
+                  sys/eventfd.h
+                  sys/file.h
+                  sys/ioctl.h
+                  sys/limits.h
+                  sys/mman.h
+                  sys/param.h
+                  sys/prctl.h
+                  sys/random.h
+                  sys/resource.h
+                  sys/select.h
+                  sys/socket.h
+                  sys/statvfs.h
+                  sys/syscall.h
+                  sys/sysctl.h
+                  sys/time.h
+                  sys/types.h
+                  sys/un.h
+                  sys/utime.h
+                  sys/wait.h
+                  syslog.h
+                  utime.h
+                  glob.h])
 
 AC_CHECK_HEADERS(sys/param.h)
 
