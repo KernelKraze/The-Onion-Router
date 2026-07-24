@@ -43,7 +43,9 @@
 #include <sys/prctl.h>
 #endif
 
-#if HAVE_SIGNAL_H
+/* Use defined() to avoid -Werror=undef when HAVE_SIGNAL_H is not set
+ * by configure (e.g. on mingw64 builds). */
+#if defined(HAVE_SIGNAL_H)
 #include <signal.h>
 #endif
 

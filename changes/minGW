@@ -1,0 +1,4 @@
+  o Code simplification and refactoring:
+    - Fix MinGW-w64 cross-compilation by adding missing system header
+      includes and fixing circular link dependencies between libtor-log
+      and libtor-thread. Fixes builds on Windows via msys2/mingw64.

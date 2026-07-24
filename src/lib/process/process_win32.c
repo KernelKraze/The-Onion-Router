@@ -20,6 +20,14 @@
 #include "lib/process/process_win32.h"
 #include "lib/process/env.h"
 
+/* On Windows/mingw64, struct timeval lives in winsock2.h, not sys/time.h.
+ * HAVE_SYS_TIME_H is not set by configure on mingw64 even though the header
+ * may exist, so the guarded include below would silently do nothing and leave
+ * struct timeval undefined when process_win32_timer_start() needs it. */
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+
 #ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
 #endif

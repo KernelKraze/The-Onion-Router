@@ -10,6 +10,9 @@
 #ifdef HAVE_UTIME_H
 #include <utime.h>
 #endif
+#ifdef _WIN32
+#include <sys/utime.h>
+#endif
 
 static void
 test_storagedir_empty(void *arg)

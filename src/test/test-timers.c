@@ -6,6 +6,9 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
 
 #include "lib/evloop/compat_libevent.h"
 #include "lib/evloop/timers.h"

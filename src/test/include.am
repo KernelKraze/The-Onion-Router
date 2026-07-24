@@ -415,7 +415,7 @@ if UNITTESTS_ENABLED
 noinst_PROGRAMS += src/test/test-bt-cl
 src_test_test_bt_cl_SOURCES = src/test/test_bt_cl.c
 src_test_test_bt_cl_LDADD = \
-	$(TOR_UTIL_TESTING_LIBS) \
+	$(TOR_UTIL_TESTING_LIBS_GROUPED) \
 	@TOR_LIB_MATH@ \
 	@TOR_LIB_WS32@ @TOR_LIB_IPHLPAPI@ @TOR_LIB_SHLWAPI@ @TOR_LIB_GDI@ @TOR_LIB_USERENV@ \
 	@TOR_TRACE_LIBS@
