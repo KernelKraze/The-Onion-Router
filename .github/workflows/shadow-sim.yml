@@ -14,6 +14,9 @@ on:
       sim_time:
         description: Simulated duration
         default: "15 minutes"
+      seed:
+        description: RNG seed (leave blank for random)
+        default: ""
   schedule:
     - cron: '0 2 * * 6'
 
@@ -23,6 +26,7 @@ env:
   BASE_REF: ${{ github.event.inputs.base_ref || 'main' }}
   SCALE: ${{ github.event.inputs.network_scale || '0.002' }}
   SIM_TIME: ${{ github.event.inputs.sim_time || '15 minutes' }}
+
 
 jobs:
   simulate:
@@ -39,6 +43,14 @@ jobs:
         with:
           ref: ${{ env.BASE_REF }}
           path: tor-baseline
+
+      - name: Generate simulation seed
+        run: |
+          if [ -n "${{ github.event.inputs.seed }}" ]; then
+            echo "SEED=${{ github.event.inputs.seed }}" >> "$GITHUB_ENV"
+          else
+            echo "SEED=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')" >> "$GITHUB_ENV"
+          fi
 
       - name: Install dependencies
         run: |
@@ -149,13 +161,13 @@ jobs:
             --network_scale "$SCALE" \
             --prefix tornet
           python3 - "$SIM_TIME" <<'EOF'
-          import sys, yaml
+          import os, sys, yaml
           with open("tornet/shadow.config.yaml") as f:
               cfg = yaml.safe_load(f)
           cfg.setdefault("host_option_defaults", {})
           cfg["host_option_defaults"]["pcap_enabled"] = False
           cfg["general"]["stop_time"] = sys.argv[1]
-          import os
+          cfg["general"]["seed"] = int(os.environ["SEED"])
           cfg["general"]["parallelism"] = os.cpu_count()
           with open("tornet/shadow.config.yaml", "w") as f:
               yaml.dump(cfg, f, sort_keys=False)
@@ -213,6 +225,10 @@ jobs:
               head -50 > "results/$net/shadow-errors.txt" || true
           done
           cp -r pdfs results/ 2>/dev/null || true
+
+      - name: Record seed for reproducibility
+        if: always()
+        run: echo "$SEED" > results/seed.txt
 
       - name: Upload results
         if: always()
