@@ -364,5 +364,7 @@ jobs:
             - Windows mingw64
 
             Naming: `<platform>-<cc>-[production|debug]`
+            ⚠️ Found a bug? Please open an issue at
+            https://github.com/KernelKraze/The-Onion-Router/issues
           files: artifacts/*
           fail_on_unmatched_files: false
