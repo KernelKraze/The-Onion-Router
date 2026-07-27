@@ -10,7 +10,7 @@ on:
         default: main
       network_scale:
         description: Fraction of the real Tor network to model
-        default: "0.002"
+        default: "0.01"
       sim_time:
         description: Simulated duration
         default: "15 minutes"
@@ -24,14 +24,17 @@ env:
   # Pin shadow to a release tag. Bump deliberately, never track master.
   SHADOW_VERSION: v3.3.0
   BASE_REF: ${{ github.event.inputs.base_ref || 'main' }}
-  SCALE: ${{ github.event.inputs.network_scale || '0.002' }}
+  # 0.01 is about the ceiling for a 4-vCPU / 16-GB hosted runner: at 0.002
+  # a single simulation peaked at 1.88 GiB and took 19m45s, and both cost
+  # and runtime grow with the scale. Going higher needs a larger runner.
+  SCALE: ${{ github.event.inputs.network_scale || '0.01' }}
   SIM_TIME: ${{ github.event.inputs.sim_time || '15 minutes' }}
 
 
 jobs:
   simulate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 350
     steps:
       - name: Checkout patched tree
         uses: actions/checkout@v4
