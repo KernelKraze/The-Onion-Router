@@ -8,6 +8,7 @@ from __future__ import unicode_literals
 FUZZERS = """
 	address
 	addressPTR
+	cell
 	consensus
 	descriptor
 	diff
