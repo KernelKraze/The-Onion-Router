@@ -226,6 +226,16 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0
         run: ./src/test/test
 
+      # The build matrix runs this through "make check", but those builds
+      # carry no sanitizer, so an overflow of a few bytes stays inside the
+      # heap and passes silently. This is the only job where the cell
+      # parsers are actually instrumented.
+      - name: Cell parser boundary cases under ASan
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ./src/test/test_fuzz_cell.sh
+
       - name: Workqueue and reproducer under ASan with leak check
         env:
           ASAN_OPTIONS: detect_leaks=1
