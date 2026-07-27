@@ -12,6 +12,7 @@ TESTS_ENVIRONMENT = \
 
 TESTSCRIPTS = \
 	src/test/fuzz_static_testcases.sh \
+	src/test/test_fuzz_cell.sh \
 	src/test/test_zero_length_keys.sh \
 	src/test/test_workqueue_cancel.sh \
 	src/test/test_workqueue_efd.sh \
@@ -430,6 +431,7 @@ EXTRA_DIST += \
 	src/test/hs_build_address.py \
 	src/test/hs_indexes.py \
 	src/test/fuzz_static_testcases.sh \
+	src/test/test_fuzz_cell.sh \
 	src/test/slownacl_curve25519.py \
 	src/test/test_rebind.sh \
 	src/test/test_rebind.py \
