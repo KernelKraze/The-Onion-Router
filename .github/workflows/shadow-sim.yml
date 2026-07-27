@@ -126,7 +126,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: staged
-          key: tornettools-staged-2023-04-v1
+          # v2: the staged set now carries tor_metrics_*.json as well.
+          key: tornettools-staged-2023-04-v2
 
       - name: Stage network data (cache miss only)
         if: steps.stage-cache.outputs.cache-hit != 'true'
@@ -155,6 +156,16 @@ jobs:
             --geoip_path tor-baseline/src/config/geoip
           mkdir -p staged
           mv relayinfo_staging_* userinfo_staging_* networkinfo_staging.gml staged/
+          # tor_metrics_*.json is what "plot --tor_metrics_path" wants, and not
+          # keeping it is why the plot step had no reference data. Upstream
+          # only documents it by using it, so warn rather than abort if this
+          # version does not emit it: the plots still render without the
+          # public Tor reference lines.
+          if ls tor_metrics_*.json >/dev/null 2>&1; then
+            mv tor_metrics_*.json staged/
+          else
+            echo "::warning::staging produced no tor_metrics_*.json"
+          fi
           cp -r tmodel-ccs2018.github.io staged/
 
       - name: Generate network
@@ -216,22 +227,51 @@ jobs:
           . toolsenv/bin/activate
           tornettools parse tornet
           tornettools parse tornet-patched
-          tornettools plot tornet tornet-patched \
-            --tor_metrics_path staged/tmodel-ccs2018.github.io 2>/dev/null || \
-            tornettools plot tornet tornet-patched || true
+          # --tor_metrics_path takes the tor_metrics_*.json that staging
+          # produces, not the tmodel directory, and --prefix is what decides
+          # where the PDFs are written. Both were wrong, and the failure was
+          # swallowed by "|| true", so every run reported green with nothing
+          # to show for it.
+          metrics=$(ls staged/tor_metrics_*.json 2>/dev/null | head -1)
+          mkdir -p pdfs
+          if [ -n "$metrics" ]; then
+            tornettools plot tornet tornet-patched \
+              --tor_metrics_path "$metrics" --prefix pdfs
+          else
+            echo "::warning::no staged tor_metrics json; plotting without the \
+          public Tor reference lines"
+            tornettools plot tornet tornet-patched --prefix pdfs
+          fi
 
       - name: Reduce artifacts to essentials
         if: always()
         run: |
           for net in tornet tornet-patched; do
             mkdir -p "results/$net"
-            cp "$net"/shadow.time "results/$net/" 2>/dev/null || true
-            cp -r "$net"/tornettools.parse.log "$net"/*.json \
-              "results/$net/" 2>/dev/null || true
+            cp "$net/shadow.time" "results/$net/" 2>/dev/null || true
+            cp "$net/tornettools.parse.log" "results/$net/" 2>/dev/null || true
+            # tornettools nests its parsed statistics, so collect them by name
+            # instead of guessing the layout: "$net"/*.json matched nothing.
+            find "$net" -name '*.json' -exec cp {} "results/$net/" \; \
+              2>/dev/null || true
             grep -rh 'error\|panic' "$net/shadow.data/shadow.log" 2>/dev/null | \
               head -50 > "results/$net/shadow-errors.txt" || true
           done
-          cp -r pdfs results/ 2>/dev/null || true
+
+          # The plots are the only quantified output of the whole run, and
+          # "cp -r pdfs" assumed an output directory that never existed. Search
+          # for them instead. This step runs with if: always(), so a missing
+          # plot is a warning here -- failing hard is the plot step's job, and
+          # doing it here would mask whatever actually broke.
+          mkdir -p results/pdfs
+          find . -name '*.pdf' -not -path './results/*' \
+            -exec cp {} results/pdfs/ \; 2>/dev/null || true
+          n=$(find results/pdfs -name '*.pdf' | wc -l | tr -d ' ')
+          echo "collected $n plot PDFs"
+          if [ "$n" -eq 0 ]; then
+            echo "::warning::tornettools produced no PDFs; this run has no \
+          quantified A/B comparison"
+          fi
 
       - name: Record seed for reproducibility
         if: always()

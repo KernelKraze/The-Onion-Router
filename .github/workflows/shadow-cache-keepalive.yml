@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: staged
-          key: tornettools-staged-2023-04-v1
+          key: tornettools-staged-2023-04-v2
 
       - name: Report which caches survived
         run: |
