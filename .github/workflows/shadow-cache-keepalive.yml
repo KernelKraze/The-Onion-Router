@@ -1,0 +1,52 @@
+name: Shadow cache keep-warm
+
+# GitHub deletes any cache that has not been accessed for 7 days, and the
+# shadow simulation is scheduled weekly, so its two caches sit exactly on
+# that boundary and get evicted periodically. When that happens the next
+# simulation has to rebuild shadow and re-download the staged network data
+# from torproject.org, which is how the 2026-07-25 run failed.
+#
+# Restoring the caches here on a shorter cycle resets their timer. This
+# does a real restore rather than a lookup-only check, because it is not
+# documented whether an existence check counts as an access.
+
+on:
+  schedule:
+    # Every third day: the longest gap is 3 days, well inside the 7-day
+    # eviction window.
+    - cron: '0 5 */3 * *'
+  workflow_dispatch:
+
+env:
+  # Must match shadow-sim.yml, or this warms the wrong key.
+  SHADOW_VERSION: v3.3.0
+
+jobs:
+  keep-warm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Touch shadow build cache
+        id: shadow
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local
+          key: shadow-${{ env.SHADOW_VERSION }}-${{ runner.os }}-ubuntu24
+
+      - name: Touch staged network data cache
+        id: staged
+        uses: actions/cache/restore@v4
+        with:
+          path: staged
+          key: tornettools-staged-2023-04-v1
+
+      - name: Report which caches survived
+        run: |
+          shadow='${{ steps.shadow.outputs.cache-hit }}'
+          staged='${{ steps.staged.outputs.cache-hit }}'
+          echo "shadow build cache : ${shadow:-miss}"
+          echo "staged data cache  : ${staged:-miss}"
+          if [ "$shadow" != 'true' ] || [ "$staged" != 'true' ]; then
+            echo "::warning::A cache was already evicted; the next shadow \
+          simulation will rebuild or re-download it."
+          fi
