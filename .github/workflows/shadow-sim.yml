@@ -258,14 +258,16 @@ jobs:
               head -50 > "results/$net/shadow-errors.txt" || true
           done
 
-          # The plots are the only quantified output of the whole run, and
-          # "cp -r pdfs" assumed an output directory that never existed. Search
-          # for them instead. This step runs with if: always(), so a missing
-          # plot is a warning here -- failing hard is the plot step's job, and
-          # doing it here would mask whatever actually broke.
+          # tornettools writes its plots to --prefix, which the plot step sets
+          # to "pdfs". Collect only from there: searching the whole workspace
+          # also swept in matplotlib's bundled toolbar icons from the venv and
+          # the tmodel distribution plots, burying the 21 real comparisons in
+          # 20 files that have nothing to do with this run.
+          # This step runs with if: always(), so a missing plot is a warning
+          # here; failing hard is the plot step's job, and doing it here would
+          # mask whatever actually broke.
           mkdir -p results/pdfs
-          find . -name '*.pdf' -not -path './results/*' \
-            -exec cp {} results/pdfs/ \; 2>/dev/null || true
+          cp pdfs/*.pdf results/pdfs/ 2>/dev/null || true
           n=$(find results/pdfs -name '*.pdf' | wc -l | tr -d ' ')
           echo "collected $n plot PDFs"
           if [ "$n" -eq 0 ]; then
