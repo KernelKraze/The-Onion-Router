@@ -980,6 +980,90 @@ test_md_corrupt_desc(void *arg)
   smartlist_free(sl);
 }
 
+/** Consensus returned by mock_reload_get_consensus(). */
+static networkstatus_t *mock_reload_ns = NULL;
+
+static networkstatus_t *
+mock_reload_get_consensus(time_t now, int flavor)
+{
+  (void)now;
+  (void)flavor;
+  return mock_reload_ns;
+}
+
+/* Reloading the cache from disk must bring last_listed up to date with the
+ * consensus we are holding before it cleans the cache by that same field.
+ * The timestamps on disk record when we last saw each microdescriptor listed,
+ * which can be arbitrarily long ago: relays no longer rotate onion keys every
+ * week, so a microdescriptor the consensus still lists can easily be older
+ * than the one week cleanup cutoff. Cleaning first drops it. Bug 7164. */
+static void
+test_md_reload_reconciles_last_listed(void *arg)
+{
+  or_options_t *options = NULL;
+  microdesc_cache_t *mc = NULL;
+  smartlist_t *added = NULL;
+  routerstatus_t *rs = NULL;
+  microdesc_t *md = NULL;
+  char d1[DIGEST256_LEN];
+  const time_t now = time(NULL);
+  /* Comfortably past TOLERATE_MICRODESC_AGE, which is one week. */
+  const time_t long_ago = now - 30*24*60*60;
+  (void)arg;
+
+  options = get_options_mutable();
+  tt_assert(options);
+  tor_free(options->CacheDirectory);
+  options->CacheDirectory = tor_strdup(get_fname("md_reload_test"));
+#ifdef _WIN32
+  tt_int_op(0, OP_EQ, mkdir(options->CacheDirectory));
+#else
+  tt_int_op(0, OP_EQ, mkdir(options->CacheDirectory, 0700));
+#endif
+
+  crypto_digest256(d1, test_md1, strlen(test_md1), DIGEST_SHA256);
+
+  /* Write one microdescriptor to disk, last listed a month ago. */
+  mc = get_microdesc_cache();
+  added = microdescs_add_to_cache(mc, test_md1, NULL, SAVED_NOWHERE, 0,
+                                  long_ago, NULL);
+  tt_int_op(1, OP_EQ, smartlist_len(added));
+  smartlist_free(added);
+  added = NULL;
+  microdesc_cache_rebuild(mc, 1 /* force */);
+
+  /* Hold a current consensus that still lists it. */
+  mock_reload_ns = tor_malloc_zero(sizeof(networkstatus_t));
+  mock_reload_ns->flavor = FLAV_MICRODESC;
+  mock_reload_ns->valid_after = now;
+  mock_reload_ns->routerstatus_list = smartlist_new();
+  rs = tor_malloc_zero(sizeof(routerstatus_t));
+  memcpy(rs->descriptor_digest, d1, DIGEST256_LEN);
+  smartlist_add(mock_reload_ns->routerstatus_list, rs);
+  MOCK(networkstatus_get_reasonably_live_consensus,
+       mock_reload_get_consensus);
+
+  /* Drop the in-memory cache, so that asking for it reloads from disk. */
+  microdesc_free_all();
+  mc = get_microdesc_cache();
+
+  /* It must have survived, carrying the timestamp of the consensus we hold
+   * rather than the one we read off the disk. */
+  md = microdesc_cache_lookup_by_digest256(mc, d1);
+  tt_assert(md);
+  tt_int_op(md->last_listed, OP_EQ, now);
+
+ done:
+  UNMOCK(networkstatus_get_reasonably_live_consensus);
+  if (mock_reload_ns) {
+    SMARTLIST_FOREACH(mock_reload_ns->routerstatus_list,
+                      routerstatus_t *, r, tor_free(r));
+    smartlist_free(mock_reload_ns->routerstatus_list);
+    tor_free(mock_reload_ns);
+  }
+  smartlist_free(added);
+}
+
 struct testcase_t microdesc_tests[] = {
   { "cache", test_md_cache, TT_FORK, NULL, NULL },
   { "broken_cache", test_md_cache_broken, TT_FORK, NULL, NULL },
@@ -990,5 +1074,7 @@ struct testcase_t microdesc_tests[] = {
   { "parse_family_ids", test_md_parse_family_ids, 0, NULL, NULL },
   { "reject_cache", test_md_reject_cache, TT_FORK, NULL, NULL },
   { "corrupt_desc", test_md_corrupt_desc, TT_FORK, NULL, NULL },
+  { "reload_reconciles_last_listed", test_md_reload_reconciles_last_listed,
+    TT_FORK, NULL, NULL },
   END_OF_TESTCASES
 };

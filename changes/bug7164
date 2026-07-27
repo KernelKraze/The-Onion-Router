@@ -1,0 +1,6 @@
+  o Minor bugfixes (microdescriptor cache):
+    - Bring last_listed times up to date with the current consensus when
+      reloading the cache from disk, before cleaning the cache by those
+      same times. Previously a microdescriptor the consensus still listed
+      could be dropped as a week stale. Fixes part of bug 7164; bugfix
+      on 0.2.3.1-alpha.

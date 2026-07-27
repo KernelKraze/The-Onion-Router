@@ -73,6 +73,8 @@ struct microdesc_cache_t {
 static microdesc_cache_t *get_microdesc_cache_noload(void);
 static void warn_if_nul_found(const char *inp, size_t len, int64_t offset,
                               const char *activity);
+static void update_microdescs_from_networkstatus_impl(
+                              microdesc_cache_t *cache, time_t now);
 
 /** Helper: computes a hash of <b>md</b> to place it in a hash table. */
 static inline unsigned int
@@ -552,6 +554,15 @@ microdesc_cache_reload(microdesc_cache_t *cache)
   }
   log_info(LD_DIR, "Reloaded microdescriptor cache. Found %d descriptors.",
            total);
+
+  /* The last_listed times we just read back from disk describe when we last
+   * saw each microdescriptor in a consensus, which may be long before the
+   * consensus we are holding now. Reconcile them before rebuilding, because
+   * the rebuild cleans the cache by exactly those timestamps: without this,
+   * a microdescriptor that is still listed in the current consensus can be
+   * treated as a week stale and dropped while a node still points at it.
+   * See bug 7164. */
+  update_microdescs_from_networkstatus_impl(cache, time(NULL));
 
   microdesc_cache_rebuild(cache, 0 /* don't force */);
 
@@ -1034,12 +1045,28 @@ update_microdesc_downloads(time_t now)
 void
 update_microdescs_from_networkstatus(time_t now)
 {
-  microdesc_cache_t *cache = get_microdesc_cache();
+  update_microdescs_from_networkstatus_impl(get_microdesc_cache(), now);
+}
+
+/** Implementation of update_microdescs_from_networkstatus(), taking the cache
+ * as an argument.
+ *
+ * The caller passes the cache rather than letting us look it up, so that the
+ * cache-loading path can reconcile timestamps without recursing back into
+ * get_microdesc_cache().
+ */
+static void
+update_microdescs_from_networkstatus_impl(microdesc_cache_t *cache,
+                                          time_t now)
+{
   microdesc_t *md;
   networkstatus_t *ns =
     networkstatus_get_reasonably_live_consensus(now, FLAV_MICRODESC);
 
-  if (! ns)
+  /* The cache-loading path reaches this before the rest of startup has
+   * necessarily finished, so do not assume the consensus carries a router
+   * list yet: there is nothing to reconcile against if it does not. */
+  if (! ns || ! ns->routerstatus_list)
     return;
 
   tor_assert(ns->flavor == FLAV_MICRODESC);
