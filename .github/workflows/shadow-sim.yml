@@ -129,11 +129,15 @@ jobs:
         if: steps.stage-cache.outputs.cache-hit != 'true'
         run: |
           . toolsenv/bin/activate
-          wget -q https://collector.torproject.org/archive/relay-descriptors/consensuses/consensuses-2023-04.tar.xz
-          wget -q https://collector.torproject.org/archive/relay-descriptors/server-descriptors/server-descriptors-2023-04.tar.xz
-          wget -q https://metrics.torproject.org/userstats-relay-country.csv
-          wget -q https://collector.torproject.org/archive/onionperf/onionperf-2023-04.tar.xz
-          wget -q -O bandwidth-2023-04.csv "https://metrics.torproject.org/bandwidth.csv?start=2023-04-01&end=2023-04-30"
+          # -nv rather than -q: on failure wget still logs the URL and the
+          # HTTP status, so the broken source is identifiable. With -q the
+          # step only surfaced "exit code 8" for all five fetches.
+          WGET="wget -nv --tries=3 --retry-connrefused"
+          $WGET https://collector.torproject.org/archive/relay-descriptors/consensuses/consensuses-2023-04.tar.xz
+          $WGET https://collector.torproject.org/archive/relay-descriptors/server-descriptors/server-descriptors-2023-04.tar.xz
+          $WGET https://metrics.torproject.org/userstats-relay-country.csv
+          $WGET https://collector.torproject.org/archive/onionperf/onionperf-2023-04.tar.xz
+          $WGET -O bandwidth-2023-04.csv "https://metrics.torproject.org/bandwidth.csv?start=2023-04-01&end=2023-04-30"
           tar xaf consensuses-2023-04.tar.xz
           tar xaf server-descriptors-2023-04.tar.xz
           tar xaf onionperf-2023-04.tar.xz
