@@ -1,0 +1,5 @@
+  o Testing:
+    - Add a deterministic reproducer for the worker thread pool shutdown
+      paths that test_workqueue does not reach: freeing the pool while
+      workers are busy, after they have drained, and with per-thread
+      updates still pending.
