@@ -1,0 +1,11 @@
+  o Testing:
+    - Add a fuzzing harness for the circuit-creation and relay message
+      cell parsers: create_cell_parse(), created_cell_parse(),
+      extend_cell_parse(), extended_cell_parse() and
+      relay_msg_decode_cell() for both the v0 and v1 relay cell formats.
+      These parsers consume cell bodies supplied by an anonymous,
+      unauthenticated peer on the ORPort, but were the only such binary
+      format we ship with no fuzzing coverage. Drive the harness over
+      their length-field boundaries from "make check" as well, since
+      fuzz_static_testcases.sh runs only when TOR_FUZZ_CORPORA points at
+      the external corpora repository.
