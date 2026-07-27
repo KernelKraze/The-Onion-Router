@@ -280,13 +280,38 @@ jobs:
           WANT_AUTOCONF: "2.71"
         run: |
           autoreconf-2.71 -if || autoreconf -if
-          ./configure --disable-asciidoc --enable-fatal-warnings
+          # Link openssl/libevent/zlib and the mingw runtime statically so the
+          # published tor.exe is self-contained: users download one file and
+          # run it, with no mingw DLLs to install alongside. LDFLAGS=-static
+          # pulls in libgcc/libwinpthread/libssp too.
+          ./configure --disable-asciidoc --enable-fatal-warnings \
+            --enable-static-tor \
+            --with-openssl-dir=/mingw64 \
+            --with-libevent-dir=/mingw64 \
+            --with-zlib-dir=/mingw64 \
+            LDFLAGS=-static
           make
 
       - name: Prepare production binary
         run: |
           cp src/app/tor.exe src/app/tor-production-windows-mingw64.exe
           strip src/app/tor-production-windows-mingw64.exe 2>/dev/null || :
+
+      - name: Verify the binary is self-contained
+        # Guard against silently shipping a dynamically linked exe. tor.exe may
+        # import only Windows system DLLs; any mingw runtime DLL means the
+        # static link did not take and the download would not run standalone.
+        run: |
+          echo "=== DLL imports of tor-production-windows-mingw64.exe ==="
+          objdump -p src/app/tor-production-windows-mingw64.exe \
+            | grep 'DLL Name' | sort -u
+          if objdump -p src/app/tor-production-windows-mingw64.exe \
+               | grep 'DLL Name' \
+               | grep -iqE 'lib(crypto|ssl|event|gcc|winpthread|ssp|lzma|zstd|stdc\+\+|brotli)|zlib1'; then
+            echo "::error::tor.exe still depends on mingw DLLs; static link failed"
+            exit 1
+          fi
+          echo "OK: only Windows system DLLs imported -- self-contained."
 
       - name: Upload production artifact
         uses: actions/upload-artifact@v4
