@@ -10,10 +10,19 @@ on:
         default: main
       network_scale:
         description: Fraction of the real Tor network to model
-        default: "0.01"
+        default: "0.005"
       sim_time:
         description: Simulated duration
-        default: "15 minutes"
+        default: "30 minutes"
+      converge_time:
+        description: Seconds of simulated time to discard as warm-up
+        default: "600"
+      onion_service_user_scale:
+        description: Multiplier for onion-service users and servers (0 disables)
+        default: "1.0"
+      torperf_num_onion_service:
+        description: Onion-service perf clients (these produce the .onionservice metrics)
+        default: "100"
       seed:
         description: RNG seed (leave blank for random)
         default: ""
@@ -24,11 +33,21 @@ env:
   # Pin shadow to a release tag. Bump deliberately, never track master.
   SHADOW_VERSION: v3.3.0
   BASE_REF: ${{ github.event.inputs.base_ref || 'main' }}
-  # 0.01 is about the ceiling for a 4-vCPU / 16-GB hosted runner: at 0.002
-  # a single simulation peaked at 1.88 GiB and took 19m45s, and both cost
-  # and runtime grow with the scale. Going higher needs a larger runner.
-  SCALE: ${{ github.event.inputs.network_scale || '0.01' }}
-  SIM_TIME: ${{ github.event.inputs.sim_time || '15 minutes' }}
+  # Measured on a 4-vCPU / 16-GB hosted runner: scale 0.005 over 15 simulated
+  # minutes cost 38m per arm and peaked at 1.88 GiB. Memory is not the limit,
+  # wall clock is. Past the warm-up the runner buys about one simulated minute
+  # per 3.8 real minutes, and a GitHub-hosted job is capped at six hours, so
+  # the whole budget is roughly 160 minutes per arm. Onion-service traffic
+  # takes six-hop circuits, so it costs more per byte than exit traffic;
+  # raising the scale and the duration together will not fit.
+  SCALE: ${{ github.event.inputs.network_scale || '0.005' }}
+  SIM_TIME: ${{ github.event.inputs.sim_time || '30 minutes' }}
+  # tornettools discards everything before this point when it parses, so a run
+  # shorter than the converge time yields no metrics at all. Its own default is
+  # 1200, which is longer than the simulations we can afford.
+  CONVERGE_TIME: ${{ github.event.inputs.converge_time || '600' }}
+  HS_USER_SCALE: ${{ github.event.inputs.onion_service_user_scale || '1.0' }}
+  HS_PERF_CLIENTS: ${{ github.event.inputs.torperf_num_onion_service || '100' }}
 
 
 jobs:
@@ -177,7 +196,23 @@ jobs:
             staged/networkinfo_staging.gml \
             staged/tmodel-ccs2018.github.io \
             --network_scale "$SCALE" \
+            --onion_service_user_scale "$HS_USER_SCALE" \
+            --torperf_num_onion_service "$HS_PERF_CLIENTS" \
             --prefix tornet
+          # Both flags are needed. onion_service_user_scale is what creates the
+          # onion-service servers, and it defaults to 0, so asking for perf
+          # clients alone would leave them with nothing to connect to. Key
+          # generation launches the tor we just built with DisableNetwork and
+          # drives it over stem, so it needs tor on PATH, which the build step
+          # has already arranged.
+          python3 -c "
+          import json
+          i = json.load(open('tornet/simulation_info.json'))
+          print('generated network:', json.dumps(i, indent=1))
+          if i['num_tgen_onionservice_servers'] == 0:
+              raise SystemExit('no onion-service servers generated; every '
+                               '.onionservice metric would come back empty')
+          "
           python3 - "$SIM_TIME" <<'EOF'
           import os, sys, yaml
           with open("tornet/shadow.config.yaml") as f:
@@ -225,8 +260,26 @@ jobs:
       - name: Parse simulated performance
         run: |
           . toolsenv/bin/activate
-          tornettools parse tornet
-          tornettools parse tornet-patched
+          # Every extractor except client goodput drops samples earlier than
+          # --converge-time, and tornettools defaults it to 1200. A 15 minute
+          # simulation is 900 seconds, so the previous runs filtered out all of
+          # their own data and shipped empty JSON for everything but goodput.
+          tornettools parse tornet --converge-time "$CONVERGE_TIME"
+          tornettools parse tornet-patched --converge-time "$CONVERGE_TIME"
+          # Report how much survived, so an empty result is visible here rather
+          # than only in the artifact.
+          python3 - <<'EOF'
+          import glob, json, os
+          for net in ("tornet", "tornet-patched"):
+              print(f"== {net}")
+              for path in sorted(glob.glob(f"{net}/tornet.plot.data/*.json")):
+                  d = json.load(open(path))
+                  if isinstance(d, dict):
+                      n = sum(len(v) for v in d.values() if isinstance(v, list))
+                  else:
+                      n = len(d)
+                  print(f"  {n:6d}  {os.path.basename(path)}")
+          EOF
           # --tor_metrics_path takes the tor_metrics_*.json that staging
           # produces, not the tmodel directory, and --prefix is what decides
           # where the PDFs are written. Both were wrong, and the failure was
@@ -249,7 +302,11 @@ jobs:
           for net in tornet tornet-patched; do
             mkdir -p "results/$net"
             cp "$net/shadow.time" "results/$net/" 2>/dev/null || true
-            cp "$net/tornettools.parse.log" "results/$net/" 2>/dev/null || true
+            # tgentools and oniontracetools each write their own log, named
+            # with a timestamp: there is no "tornettools.parse.log", so the
+            # old copy silently matched nothing and every run threw away the
+            # only output that explains why a metric came back empty.
+            cp "$net"/*tools.parse.*.log "results/$net/" 2>/dev/null || true
             # tornettools nests its parsed statistics, so collect them by name
             # instead of guessing the layout: "$net"/*.json matched nothing.
             find "$net" -name '*.json' -exec cp {} "results/$net/" \; \
