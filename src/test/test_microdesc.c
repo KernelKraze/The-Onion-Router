@@ -6,21 +6,32 @@
 
 #define DIRVOTE_PRIVATE
 #include "app/config/config.h"
+#include "core/mainloop/connection.h"
 #include "feature/dirauth/dirvote.h"
+#include "feature/dirauth/shared_random.h"
+#include "feature/dirparse/authcert_parse.h"
 #include "feature/dirparse/microdesc_parse.h"
 #include "feature/dirparse/routerparse.h"
+#include "feature/nodelist/authcert.h"
 #include "feature/nodelist/microdesc.h"
 #include "feature/nodelist/networkstatus.h"
 #include "feature/nodelist/nodefamily.h"
 #include "feature/nodelist/routerlist.h"
 #include "feature/nodelist/torcert.h"
+#include "feature/relay/router.h"
 
+#include "lib/crypt_ops/crypto_format.h"
+
+#include "feature/dirauth/vote_microdesc_hash_st.h"
+#include "feature/nodelist/authority_cert_st.h"
 #include "feature/nodelist/microdesc_st.h"
 #include "feature/nodelist/networkstatus_st.h"
 #include "feature/nodelist/routerinfo_st.h"
 #include "feature/nodelist/routerstatus_st.h"
+#include "feature/nodelist/vote_routerstatus_st.h"
 
 #include "test/test.h"
+#include "test/test_dir_common.h"
 #include "test/log_test_helpers.h"
 
 #ifdef HAVE_SYS_STAT_H
@@ -1064,6 +1075,210 @@ test_md_reload_reconciles_last_listed(void *arg)
   smartlist_free(added);
 }
 
+/** Base64 of the digest of test_md1, for the consensus we build below. */
+static char md1_hash_b64[BASE64_DIGEST256_LEN+1];
+
+/** Generate the routerstatus for a one-relay vote whose microdescriptor is
+ * test_md1. dir_common_add_rs_and_parse() calls this until it returns NULL. */
+static vote_routerstatus_t *
+gen_rs_listing_test_md1(int idx, time_t now)
+{
+  vote_routerstatus_t *vrs = NULL;
+  routerstatus_t *rs = NULL;
+  char *method_list = NULL;
+
+  if (idx > 0)
+    return NULL;
+
+  vrs = tor_malloc_zero(sizeof(vote_routerstatus_t));
+  rs = &vrs->status;
+  vrs->version = tor_strdup("0.4.9.8");
+  vrs->published_on = now - 1000;
+  strlcpy(rs->nickname, "mdholder", sizeof(rs->nickname));
+  memset(rs->identity_digest, TEST_DIR_ROUTER_ID_1, DIGEST_LEN);
+  memset(rs->descriptor_digest, TEST_DIR_ROUTER_DD_1, DIGEST_LEN);
+  tor_addr_from_ipv4h(&rs->ipv4_addr, 0x99008801);
+  rs->ipv4_orport = 443;
+  rs->ipv4_dirport = 8000;
+  rs->is_flagged_running = 1;
+  rs->is_valid = 1;
+  rs->is_v2_dir = 1;
+  vrs->protocols = tor_strdup("Link=7 HSDir=3");
+
+  vrs->microdesc = tor_malloc_zero(sizeof(vote_microdesc_hash_t));
+  method_list = make_consensus_method_list(MIN_SUPPORTED_CONSENSUS_METHOD,
+                                           MAX_SUPPORTED_CONSENSUS_METHOD,
+                                           ",");
+  tor_asprintf(&vrs->microdesc->microdesc_hash_line,
+               "m %s sha256=%s\n", method_list, md1_hash_b64);
+  tor_free(method_list);
+
+  return vrs;
+}
+
+static authority_cert_t *mock_v3_cert;
+
+static authority_cert_t *
+get_my_v3_authority_cert_mock(void)
+{
+  tor_assert(mock_v3_cert);
+  return mock_v3_cert;
+}
+
+/** The consensus we build is valid a little in the future, which is not what
+ * this test is about; swallow the resulting clock-skew report. */
+static void
+clock_skew_warning_mock(const connection_t *conn, long apparent_skew,
+                        int trusted, log_domain_mask_t domain,
+                        const char *received, const char *source)
+{
+  (void)conn; (void)apparent_skew; (void)trusted;
+  (void)domain; (void)received; (void)source;
+}
+
+/** Build a signed microdesc-flavour consensus listing test_md1, the way
+ * test_routerlist.c builds one, but with the generator above. */
+static void
+construct_md_consensus(char **consensus_out, time_t now)
+{
+  networkstatus_t *vote = NULL;
+  networkstatus_t *v1 = NULL, *v2 = NULL, *v3 = NULL;
+  authority_cert_t *cert1 = NULL, *cert2 = NULL, *cert3 = NULL;
+  crypto_pk_t *sign_skey_1 = NULL, *sign_skey_2 = NULL, *sign_skey_3 = NULL;
+  crypto_pk_t *sign_skey_leg = NULL;
+  smartlist_t *votes = NULL;
+  int n_vrs;
+
+  tt_assert(!dir_common_authority_pk_init(&cert1, &cert2, &cert3,
+                                          &sign_skey_1, &sign_skey_2,
+                                          &sign_skey_3));
+  sign_skey_leg = pk_generate(4);
+
+  /* format_networkstatus_vote() asks the shared-random subsystem for its
+   * contribution, and that asserts if the subsystem was never started. */
+  MOCK(get_my_v3_authority_cert, get_my_v3_authority_cert_mock);
+  mock_v3_cert = authority_cert_parse_from_string(AUTHORITY_CERT_1,
+                                                  strlen(AUTHORITY_CERT_1),
+                                                  NULL);
+  tt_assert(mock_v3_cert);
+  sr_init(0);
+  UNMOCK(get_my_v3_authority_cert);
+
+  dir_common_construct_vote_1(&vote, cert1, sign_skey_1,
+                              &gen_rs_listing_test_md1, &v1, &n_vrs, now, 1);
+  networkstatus_vote_free(vote);
+  tt_assert(v1);
+  dir_common_construct_vote_2(&vote, cert2, sign_skey_2,
+                              &gen_rs_listing_test_md1, &v2, &n_vrs, now, 1);
+  networkstatus_vote_free(vote);
+  tt_assert(v2);
+  dir_common_construct_vote_3(&vote, cert3, sign_skey_3,
+                              &gen_rs_listing_test_md1, &v3, &n_vrs, now, 1);
+  networkstatus_vote_free(vote);
+  tt_assert(v3);
+
+  votes = smartlist_new();
+  smartlist_add(votes, v1);
+  smartlist_add(votes, v2);
+  smartlist_add(votes, v3);
+
+  *consensus_out = networkstatus_compute_consensus(votes, 3,
+                                                   cert1->identity_key,
+                                                   sign_skey_1,
+                                                   "AAAAAAAAAAAAAAAAAAAA",
+                                                   sign_skey_leg,
+                                                   FLAV_MICRODESC);
+  tt_assert(*consensus_out);
+
+ done:
+  UNMOCK(get_my_v3_authority_cert);
+  authority_cert_free(mock_v3_cert);
+  networkstatus_vote_free(v1);
+  networkstatus_vote_free(v2);
+  networkstatus_vote_free(v3);
+  smartlist_free(votes);
+  authority_cert_free(cert1);
+  authority_cert_free(cert2);
+  authority_cert_free(cert3);
+  crypto_pk_free(sign_skey_1);
+  crypto_pk_free(sign_skey_2);
+  crypto_pk_free(sign_skey_3);
+  crypto_pk_free(sign_skey_leg);
+}
+
+/* A microdescriptor that the current consensus still lists, and that a node
+ * is holding, must not be seen as a week stale. Applying a consensus has to
+ * bring last_listed forward, and it has to do so on every path that can apply
+ * one: the path taken when certificates arrive for a consensus we were
+ * already holding did not, and that is what the warning in bug 7164 reports.
+ */
+static void
+test_md_held_and_listed_is_not_stale(void *arg)
+{
+  or_options_t *options = NULL;
+  microdesc_cache_t *mc = NULL;
+  smartlist_t *added = NULL;
+  microdesc_t *md = NULL;
+  char *consensus_text = NULL;
+  char d1[DIGEST256_LEN];
+  const time_t now = time(NULL);
+  /* Comfortably past TOLERATE_MICRODESC_AGE, which is one week. */
+  const time_t long_ago = now - 30*24*60*60;
+  (void)arg;
+
+  options = get_options_mutable();
+  tt_assert(options);
+  tor_free(options->CacheDirectory);
+  options->CacheDirectory = tor_strdup(get_fname("md_stale_test"));
+#ifdef _WIN32
+  tt_int_op(0, OP_EQ, mkdir(options->CacheDirectory));
+#else
+  tt_int_op(0, OP_EQ, mkdir(options->CacheDirectory, 0700));
+#endif
+
+  crypto_digest256(d1, test_md1, strlen(test_md1), DIGEST_SHA256);
+  digest256_to_base64(md1_hash_b64, d1);
+
+  /* Build the consensus first: doing so clears the nodelist. */
+  construct_md_consensus(&consensus_text, now);
+  tt_assert(consensus_text);
+
+  /* Now cache the microdescriptor, last seen a month ago. */
+  mc = get_microdesc_cache();
+  added = microdescs_add_to_cache(mc, test_md1, NULL, SAVED_NOWHERE, 0,
+                                  long_ago, NULL);
+  tt_int_op(1, OP_EQ, smartlist_len(added));
+  smartlist_free(added);
+  added = NULL;
+  md = microdesc_cache_lookup_by_digest256(mc, d1);
+  tt_assert(md);
+  tt_int_op(md->last_listed, OP_EQ, long_ago);
+
+  /* Apply the consensus, as any of the paths that apply one would. */
+  MOCK(clock_skew_warning, clock_skew_warning_mock);
+  tt_int_op(0, OP_EQ,
+            networkstatus_set_current_consensus(consensus_text,
+                                                strlen(consensus_text),
+                                                "microdesc", 0, NULL));
+  tt_assert(networkstatus_get_latest_consensus_by_flavor(FLAV_MICRODESC));
+
+  /* A node is now holding it, and its time has moved forward. */
+  tt_int_op(md->held_by_nodes, OP_EQ, 1);
+  tt_int_op(md->last_listed, OP_GT, long_ago);
+
+  /* So cleaning the cache must not report it as very old. */
+  setup_capture_of_logs(LOG_WARN);
+  microdesc_cache_clean(mc, 0 /* cutoff */, 0 /* force */);
+  expect_no_log_msg_containing("Microdescriptor seemed very old");
+  tt_assert(microdesc_cache_lookup_by_digest256(mc, d1));
+
+ done:
+  teardown_capture_of_logs();
+  UNMOCK(clock_skew_warning);
+  tor_free(consensus_text);
+  smartlist_free(added);
+}
+
 struct testcase_t microdesc_tests[] = {
   { "cache", test_md_cache, TT_FORK, NULL, NULL },
   { "broken_cache", test_md_cache_broken, TT_FORK, NULL, NULL },
@@ -1075,6 +1290,8 @@ struct testcase_t microdesc_tests[] = {
   { "reject_cache", test_md_reject_cache, TT_FORK, NULL, NULL },
   { "corrupt_desc", test_md_corrupt_desc, TT_FORK, NULL, NULL },
   { "reload_reconciles_last_listed", test_md_reload_reconciles_last_listed,
+    TT_FORK, NULL, NULL },
+  { "held_and_listed_is_not_stale", test_md_held_and_listed_is_not_stale,
     TT_FORK, NULL, NULL },
   END_OF_TESTCASES
 };
