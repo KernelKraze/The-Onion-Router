@@ -205,14 +205,6 @@ jobs:
           # generation launches the tor we just built with DisableNetwork and
           # drives it over stem, so it needs tor on PATH, which the build step
           # has already arranged.
-          python3 -c "
-          import json
-          i = json.load(open('tornet/simulation_info.json'))
-          print('generated network:', json.dumps(i, indent=1))
-          if i['num_tgen_onionservice_servers'] == 0:
-              raise SystemExit('no onion-service servers generated; every '
-                               '.onionservice metric would come back empty')
-          "
           python3 - "$SIM_TIME" <<'EOF'
           import os, sys, yaml
           with open("tornet/shadow.config.yaml") as f:
@@ -224,6 +216,18 @@ jobs:
           cfg["general"]["parallelism"] = os.cpu_count()
           with open("tornet/shadow.config.yaml", "w") as f:
               yaml.dump(cfg, f, sort_keys=False)
+
+          # Check the generated network here rather than downstream: the only
+          # record of what was generated, simulation_info.json, is written by
+          # the parse step, which is hours of simulation away. The host list is
+          # available now and says the same thing.
+          hosts = cfg["hosts"]
+          hs = sorted(h for h in hosts if "onionservice" in h)
+          print(f"{len(hosts)} hosts, of which {len(hs)} carry onion-service"
+                f" traffic")
+          if not hs:
+              raise SystemExit("no onion-service hosts generated; every "
+                               ".onionservice metric would come back empty")
           EOF
 
       - name: Run baseline simulation
@@ -273,12 +277,17 @@ jobs:
           for net in ("tornet", "tornet-patched"):
               print(f"== {net}")
               for path in sorted(glob.glob(f"{net}/tornet.plot.data/*.json")):
+                  name = os.path.basename(path)
                   d = json.load(open(path))
+                  # This one describes the network rather than measuring it.
+                  if name == "simulation_info.json":
+                      print(f"  {json.dumps(d, sort_keys=True)}")
+                      continue
                   if isinstance(d, dict):
                       n = sum(len(v) for v in d.values() if isinstance(v, list))
                   else:
                       n = len(d)
-                  print(f"  {n:6d}  {os.path.basename(path)}")
+                  print(f"  {n:6d}  {name}")
           EOF
           # --tor_metrics_path takes the tor_metrics_*.json that staging
           # produces, not the tmodel directory, and --prefix is what decides
