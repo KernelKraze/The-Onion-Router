@@ -315,7 +315,12 @@ jobs:
             # with a timestamp: there is no "tornettools.parse.log", so the
             # old copy silently matched nothing and every run threw away the
             # only output that explains why a metric came back empty.
-            cp "$net"/*tools.parse.*.log "results/$net/" 2>/dev/null || true
+            # That timestamp is %H:%M:%S, and upload-artifact rejects colons,
+            # so rename on the way out rather than lose the whole artifact.
+            for log in "$net"/*tools.parse.*.log; do
+              [ -e "$log" ] || continue
+              cp "$log" "results/$net/$(basename "$log" | tr ':' '-')"
+            done
             # tornettools nests its parsed statistics, so collect them by name
             # instead of guessing the layout: "$net"/*.json matched nothing.
             find "$net" -name '*.json' -exec cp {} "results/$net/" \; \
