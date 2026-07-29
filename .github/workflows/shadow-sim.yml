@@ -327,6 +327,13 @@ jobs:
           with open(p) as f:
               cfg = yaml.safe_load(f)
           cfg["general"]["parallelism"] = os.cpu_count()
+          # Fix absolute atlas path from setup job - use relative path within the tornet dir
+          if "network" in cfg and "graph" in cfg["network"] and "file" in cfg["network"]["graph"]:
+              graph_file = cfg["network"]["graph"]["file"]
+              if "path" in graph_file:
+                  old_path = graph_file["path"]
+                  fname = os.path.basename(old_path)
+                  graph_file["path"] = os.path.join(sys.argv[1], "conf", fname)
           with open(p, "w") as f:
               yaml.dump(cfg, f, sort_keys=False)
           print("parallelism", cfg["general"]["parallelism"],
