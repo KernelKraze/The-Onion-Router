@@ -2,6 +2,15 @@ name: Shadow network simulation
 
 # Full-network A/B simulation. Heavy job: run on demand or weekly,
 # never on every push.
+#
+# Three stages, so the two arms run at the same time. Measured on the
+# 2026-07-29 run: setup 6 min, each simulation 2h13m, parse 2 min. Run one
+# after the other that is 4h34m; run side by side it is about 2h25m, and each
+# arm gets its own six-hour job limit instead of the two sharing one.
+#
+# shadow.data is tens of gigabytes, so it must not travel between jobs. Each
+# arm parses its own results and hands on only tornet.plot.data, which is a
+# few hundred kilobytes.
 on:
   workflow_dispatch:
     inputs:
@@ -33,13 +42,10 @@ env:
   # Pin shadow to a release tag. Bump deliberately, never track master.
   SHADOW_VERSION: v3.3.0
   BASE_REF: ${{ github.event.inputs.base_ref || 'main' }}
-  # Measured on a 4-vCPU / 16-GB hosted runner: scale 0.005 over 15 simulated
-  # minutes cost 38m per arm and peaked at 1.88 GiB. Memory is not the limit,
-  # wall clock is. Past the warm-up the runner buys about one simulated minute
-  # per 3.8 real minutes, and a GitHub-hosted job is capped at six hours, so
-  # the whole budget is roughly 160 minutes per arm. Onion-service traffic
-  # takes six-hop circuits, so it costs more per byte than exit traffic;
-  # raising the scale and the duration together will not fit.
+  # Memory is not the limit: the 0.005 run peaked at 1.88 GiB. Wall clock is.
+  # One simulation takes a little over two hours at this scale, and
+  # onion-service traffic rides six-hop circuits, so raising the scale and the
+  # duration together will not fit even with the arms running side by side.
   SCALE: ${{ github.event.inputs.network_scale || '0.005' }}
   SIM_TIME: ${{ github.event.inputs.sim_time || '30 minutes' }}
   # tornettools discards everything before this point when it parses, so a run
@@ -49,11 +55,13 @@ env:
   HS_USER_SCALE: ${{ github.event.inputs.onion_service_user_scale || '1.0' }}
   HS_PERF_CLIENTS: ${{ github.event.inputs.torperf_num_onion_service || '100' }}
 
-
 jobs:
-  simulate:
+  setup:
+    name: Build and generate the network
     runs-on: ubuntu-24.04
-    timeout-minutes: 350
+    timeout-minutes: 120
+    outputs:
+      seed: ${{ steps.seed.outputs.seed }}
     steps:
       - name: Checkout patched tree
         uses: actions/checkout@v4
@@ -67,12 +75,15 @@ jobs:
           path: tor-baseline
 
       - name: Generate simulation seed
+        id: seed
         run: |
           if [ -n "${{ github.event.inputs.seed }}" ]; then
-            echo "SEED=${{ github.event.inputs.seed }}" >> "$GITHUB_ENV"
+            SEED="${{ github.event.inputs.seed }}"
           else
-            echo "SEED=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')" >> "$GITHUB_ENV"
+            SEED=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')
           fi
+          echo "SEED=$SEED" >> "$GITHUB_ENV"
+          echo "seed=$SEED" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |
@@ -122,12 +133,25 @@ jobs:
             cd ..
           done
           # tornettools bakes ~/.local/bin/tor into shadow.config.yaml (its
-          # standard install convention), so the binaries must live there.
-          # Overwriting that file between runs swaps the binary without
-          # regenerating the network.
+          # standard install convention) and needs tor on PATH to generate the
+          # onion-service keys, so the baseline goes there for the generate
+          # step. Each simulation job installs its own arm's binary over it.
           mkdir -p "$HOME/.local/bin"
           cp tor-baseline/src/app/tor "$HOME/.local/bin/tor"
           cp tor-baseline/src/tools/tor-gencert "$HOME/.local/bin/tor-gencert"
+
+      - name: Refuse to compare a binary with itself
+        run: |
+          # If BASE_REF resolves to the same tree, the run would report "no
+          # difference" for entirely the wrong reason.
+          a=$(sha256sum tor-baseline/src/app/tor | cut -d' ' -f1)
+          b=$(sha256sum tor-patched/src/app/tor  | cut -d' ' -f1)
+          echo "baseline $a"
+          echo "patched  $b"
+          if [ "$a" = "$b" ]; then
+            echo "::error::the two tor binaries are identical; nothing to compare"
+            exit 1
+          fi
 
       - name: Install tornettools
         run: |
@@ -152,9 +176,8 @@ jobs:
         if: steps.stage-cache.outputs.cache-hit != 'true'
         run: |
           . toolsenv/bin/activate
-          # -nv rather than -q: on failure wget still logs the URL and the
-          # HTTP status, so the broken source is identifiable. With -q the
-          # step only surfaced "exit code 8" for all five fetches.
+          # -nv rather than -q: on failure wget still logs the URL and the HTTP
+          # status, so the broken source is identifiable.
           WGET="wget -nv --tries=3 --retry-connrefused"
           $WGET https://collector.torproject.org/archive/relay-descriptors/consensuses/consensuses-2023-04.tar.xz
           $WGET https://collector.torproject.org/archive/relay-descriptors/server-descriptors/server-descriptors-2023-04.tar.xz
@@ -176,10 +199,7 @@ jobs:
           mkdir -p staged
           mv relayinfo_staging_* userinfo_staging_* networkinfo_staging.gml staged/
           # tor_metrics_*.json is what "plot --tor_metrics_path" wants, and not
-          # keeping it is why the plot step had no reference data. Upstream
-          # only documents it by using it, so warn rather than abort if this
-          # version does not emit it: the plots still render without the
-          # public Tor reference lines.
+          # keeping it is why the plot step had no reference data.
           if ls tor_metrics_*.json >/dev/null 2>&1; then
             mv tor_metrics_*.json staged/
           else
@@ -201,10 +221,7 @@ jobs:
             --prefix tornet
           # Both flags are needed. onion_service_user_scale is what creates the
           # onion-service servers, and it defaults to 0, so asking for perf
-          # clients alone would leave them with nothing to connect to. Key
-          # generation launches the tor we just built with DisableNetwork and
-          # drives it over stem, so it needs tor on PATH, which the build step
-          # has already arranged.
+          # clients alone would leave them with nothing to connect to.
           python3 - "$SIM_TIME" <<'EOF'
           import os, sys, yaml
           with open("tornet/shadow.config.yaml") as f:
@@ -213,7 +230,6 @@ jobs:
           cfg["host_option_defaults"]["pcap_enabled"] = False
           cfg["general"]["stop_time"] = sys.argv[1]
           cfg["general"]["seed"] = int(os.environ["SEED"])
-          cfg["general"]["parallelism"] = os.cpu_count()
           with open("tornet/shadow.config.yaml", "w") as f:
               yaml.dump(cfg, f, sort_keys=False)
 
@@ -229,71 +245,223 @@ jobs:
               raise SystemExit("no onion-service hosts generated; every "
                                ".onionservice metric would come back empty")
           EOF
+          # parallelism is deliberately left alone here and set in each
+          # simulation job, which is where the core count actually applies.
+          du -sh tornet
 
-      - name: Run baseline simulation
+      - name: Hand the network and both binaries to the simulation jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-setup
+          path: |
+            tornet
+            tor-baseline/src/app/tor
+            tor-patched/src/app/tor
+          retention-days: 1
+          if-no-files-found: error
+
+  simulate:
+    name: Simulate (${{ matrix.arm }})
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      # One arm failing should not cancel the other: a half result still tells
+      # us whether that arm crashed.
+      fail-fast: false
+      matrix:
+        include:
+          - arm: baseline
+            net: tornet
+          - arm: patched
+            net: tornet-patched
+    steps:
+      - name: Install dependencies
         run: |
-          cp -r tornet tornet-patched
-          cd tornet
+          sudo apt-get update -q
+          sudo apt-get install -y -q libevent-dev libssl-dev zlib1g-dev \
+            libglib2.0-dev libigraph-dev netbase python3-venv xz-utils \
+            util-linux procps git
+
+      - name: Restore shadow build cache
+        id: shadow-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local
+          key: shadow-${{ env.SHADOW_VERSION }}-${{ runner.os }}-ubuntu24
+
+      - name: Refuse to run without shadow
+        if: steps.shadow-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "::error::shadow build cache missed; the setup job populates it."
+          exit 1
+
+      - name: Add shadow to PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch the generated network and the binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: shadow-setup
+
+      - name: Install this arm's tor and name its directory
+        run: |
+          # tornettools baked ~/.local/bin/tor into shadow.config.yaml, so the
+          # arm is chosen purely by which binary sits at that path.
+          if [ "${{ matrix.arm }}" = "baseline" ]; then
+            src=tor-baseline/src/app/tor
+          else
+            src=tor-patched/src/app/tor
+          fi
+          chmod +x "$src"
+          cp "$src" "$HOME/.local/bin/tor"
+          "$HOME/.local/bin/tor" --version
+          # tornettools labels a dataset by its directory name, so the name has
+          # to be what the analyze job expects.
+          if [ "${{ matrix.net }}" != "tornet" ]; then
+            mv tornet "${{ matrix.net }}"
+          fi
+          python3 - "${{ matrix.net }}" <<'EOF'
+          import os, sys, yaml
+          p = f"{sys.argv[1]}/shadow.config.yaml"
+          with open(p) as f:
+              cfg = yaml.safe_load(f)
+          cfg["general"]["parallelism"] = os.cpu_count()
+          with open(p, "w") as f:
+              yaml.dump(cfg, f, sort_keys=False)
+          print("parallelism", cfg["general"]["parallelism"],
+                "seed", cfg["general"]["seed"],
+                "stop_time", cfg["general"]["stop_time"])
+          EOF
+
+      - name: Run the simulation
+        run: |
+          cd "${{ matrix.net }}"
           /usr/bin/time -v shadow shadow.config.yaml > shadow.stdout 2> shadow.time
           tail -5 shadow.time
 
-      - name: Run patched simulation (same runner, same network)
+      - name: Check for tor errors
         run: |
-          cp tor-patched/src/app/tor "$HOME/.local/bin/tor"
-          cd tornet-patched
-          /usr/bin/time -v shadow shadow.config.yaml > shadow.stdout 2> shadow.time
-          tail -5 shadow.time
+          net="${{ matrix.net }}"
+          errs=$(grep -rl --include='*.log' '\[err\]' "$net/shadow.data/hosts" | head -5 || true)
+          bugs=$(grep -rh --include='*.log' 'Bug:' "$net/shadow.data/hosts" | sort -u | head -10 || true)
+          if [ -n "$errs" ] || [ -n "$bugs" ]; then
+            echo "$net: tor errors detected"
+            echo "$errs"
+            echo "$bugs"
+            exit 1
+          fi
+          echo "$net: no tor errors"
 
-      - name: Check for tor errors in both simulations
+      - name: Install tornettools
         run: |
-          status=0
-          for net in tornet tornet-patched; do
-            errs=$(grep -rl --include='*.log' '\[err\]' "$net/shadow.data/hosts" | head -5 || true)
-            bugs=$(grep -rh --include='*.log' 'Bug:' "$net/shadow.data/hosts" | sort -u | head -10 || true)
-            if [ -n "$errs" ] || [ -n "$bugs" ]; then
-              echo "$net: tor errors detected"
-              echo "$errs"
-              echo "$bugs"
-              status=1
-            else
-              echo "$net: no tor errors"
-            fi
-          done
-          exit $status
+          git clone --depth 1 https://github.com/shadow/tornettools.git
+          python3 -m venv toolsenv
+          . toolsenv/bin/activate
+          pip install -q 'numpy<2.0'
+          pip install -q -r tornettools/requirements.txt
+          pip install -q 'tgentools @ git+https://github.com/shadow/tgen.git#subdirectory=tools'
+          pip install -q 'oniontracetools @ git+https://github.com/shadow/oniontrace.git#subdirectory=tools'
+          pip install -q ./tornettools
 
-      - name: Parse simulated performance
+      - name: Parse this arm
         run: |
           . toolsenv/bin/activate
           # Every extractor except client goodput drops samples earlier than
-          # --converge-time, and tornettools defaults it to 1200. A 15 minute
-          # simulation is 900 seconds, so the previous runs filtered out all of
-          # their own data and shipped empty JSON for everything but goodput.
-          tornettools parse tornet --converge-time "$CONVERGE_TIME"
-          tornettools parse tornet-patched --converge-time "$CONVERGE_TIME"
+          # --converge-time, and tornettools defaults it to 1200. A simulation
+          # shorter than that filters out all of its own data.
+          tornettools parse "${{ matrix.net }}" --converge-time "$CONVERGE_TIME"
           # Report how much survived, so an empty result is visible here rather
-          # than only in the artifact.
-          python3 - <<'EOF'
-          import glob, json, os
-          for net in ("tornet", "tornet-patched"):
-              print(f"== {net}")
-              for path in sorted(glob.glob(f"{net}/tornet.plot.data/*.json")):
-                  name = os.path.basename(path)
-                  d = json.load(open(path))
-                  # This one describes the network rather than measuring it.
-                  if name == "simulation_info.json":
-                      print(f"  {json.dumps(d, sort_keys=True)}")
-                      continue
-                  if isinstance(d, dict):
-                      n = sum(len(v) for v in d.values() if isinstance(v, list))
-                  else:
-                      n = len(d)
-                  print(f"  {n:6d}  {name}")
+          # than only on opening the artifact.
+          python3 - "${{ matrix.net }}" <<'EOF'
+          import glob, json, os, sys
+          net = sys.argv[1]
+          for path in sorted(glob.glob(f"{net}/tornet.plot.data/*.json")):
+              name = os.path.basename(path)
+              d = json.load(open(path))
+              if name == "simulation_info.json":
+                  print(f"  {json.dumps(d, sort_keys=True)}")
+                  continue
+              # Three shapes turn up: a flat list; a dict of lists keyed by
+              # transfer size; and a dict of plain numbers keyed by simulated
+              # second, which is what relay_goodput is. Counting only lists
+              # reports that last one as empty when it is in fact complete.
+              if isinstance(d, list):
+                  n = len(d)
+              elif d and all(isinstance(v, (int, float)) for v in d.values()):
+                  n = len(d)
+              else:
+                  n = sum(len(v) for v in d.values() if isinstance(v, list))
+              print(f"  {n:7d}  {name}")
           EOF
+
+      - name: Collect this arm's results
+        if: always()
+        run: |
+          net="${{ matrix.net }}"
+          mkdir -p "out/$net"
+          cp -r "$net/tornet.plot.data" "out/$net/" 2>/dev/null || true
+          cp "$net/shadow.time" "out/$net/" 2>/dev/null || true
+          # tgentools and oniontracetools each write their own log, named with
+          # an %H:%M:%S timestamp, and upload-artifact rejects colons, so
+          # rename on the way out rather than lose the whole artifact.
+          for log in "$net"/*tools.parse.*.log; do
+            [ -e "$log" ] || continue
+            cp "$log" "out/$net/$(basename "$log" | tr ':' '-')"
+          done
+          grep -rh 'error\|panic' "$net/shadow.data/shadow.log" 2>/dev/null | \
+            head -50 > "out/$net/shadow-errors.txt" || true
+          find out -type f | sort
+
+      - name: Upload this arm's results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-arm-${{ matrix.arm }}
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
+
+  analyze:
+    name: Plot the comparison
+    needs: [setup, simulate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q python3-venv python3-matplotlib \
+            python3-scipy python3-numpy git
+
+      - name: Fetch both arms
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shadow-arm-*
+          merge-multiple: true
+
+      - name: Restore staged network data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: staged
+          key: tornettools-staged-2023-04-v2
+
+      - name: Install tornettools
+        run: |
+          git clone --depth 1 https://github.com/shadow/tornettools.git
+          python3 -m venv toolsenv
+          . toolsenv/bin/activate
+          pip install -q 'numpy<2.0'
+          pip install -q -r tornettools/requirements.txt
+          pip install -q ./tornettools
+
+      - name: Plot
+        run: |
+          . toolsenv/bin/activate
+          find tornet tornet-patched -type f | sort
           # --tor_metrics_path takes the tor_metrics_*.json that staging
           # produces, not the tmodel directory, and --prefix is what decides
-          # where the PDFs are written. Both were wrong, and the failure was
-          # swallowed by "|| true", so every run reported green with nothing
-          # to show for it.
+          # where the PDFs are written.
           metrics=$(ls staged/tor_metrics_*.json 2>/dev/null | head -1)
           mkdir -p pdfs
           if [ -n "$metrics" ]; then
@@ -305,50 +473,21 @@ jobs:
             tornettools plot tornet tornet-patched --prefix pdfs
           fi
 
-      - name: Reduce artifacts to essentials
+      - name: Assemble the final artifact
         if: always()
         run: |
-          for net in tornet tornet-patched; do
-            mkdir -p "results/$net"
-            cp "$net/shadow.time" "results/$net/" 2>/dev/null || true
-            # tgentools and oniontracetools each write their own log, named
-            # with a timestamp: there is no "tornettools.parse.log", so the
-            # old copy silently matched nothing and every run threw away the
-            # only output that explains why a metric came back empty.
-            # That timestamp is %H:%M:%S, and upload-artifact rejects colons,
-            # so rename on the way out rather than lose the whole artifact.
-            for log in "$net"/*tools.parse.*.log; do
-              [ -e "$log" ] || continue
-              cp "$log" "results/$net/$(basename "$log" | tr ':' '-')"
-            done
-            # tornettools nests its parsed statistics, so collect them by name
-            # instead of guessing the layout: "$net"/*.json matched nothing.
-            find "$net" -name '*.json' -exec cp {} "results/$net/" \; \
-              2>/dev/null || true
-            grep -rh 'error\|panic' "$net/shadow.data/shadow.log" 2>/dev/null | \
-              head -50 > "results/$net/shadow-errors.txt" || true
-          done
-
-          # tornettools writes its plots to --prefix, which the plot step sets
-          # to "pdfs". Collect only from there: searching the whole workspace
-          # also swept in matplotlib's bundled toolbar icons from the venv and
-          # the tmodel distribution plots, burying the 21 real comparisons in
-          # 20 files that have nothing to do with this run.
-          # This step runs with if: always(), so a missing plot is a warning
-          # here; failing hard is the plot step's job, and doing it here would
-          # mask whatever actually broke.
           mkdir -p results/pdfs
+          cp -r tornet tornet-patched results/ 2>/dev/null || true
+          # Collect only from the plot prefix: searching the whole workspace
+          # also sweeps in matplotlib's bundled toolbar icons from the venv.
           cp pdfs/*.pdf results/pdfs/ 2>/dev/null || true
+          echo "${{ needs.setup.outputs.seed }}" > results/seed.txt
           n=$(find results/pdfs -name '*.pdf' | wc -l | tr -d ' ')
           echo "collected $n plot PDFs"
           if [ "$n" -eq 0 ]; then
             echo "::warning::tornettools produced no PDFs; this run has no \
           quantified A/B comparison"
           fi
-
-      - name: Record seed for reproducibility
-        if: always()
-        run: echo "$SEED" > results/seed.txt
 
       - name: Upload results
         if: always()
