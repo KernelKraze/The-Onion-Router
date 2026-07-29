@@ -411,6 +411,39 @@ jobs:
           done
           grep -rh 'error\|panic' "$net/shadow.data/shadow.log" 2>/dev/null | \
             head -50 > "out/$net/shadow-errors.txt" || true
+
+          # Until now every host log was grepped once and then thrown away with
+          # the runner, so a run that went wrong left nothing to look at. The
+          # generated network logs tor at notice level, which is a few kilobytes
+          # per host over thirty simulated minutes, so a digest and a sample fit
+          # comfortably in an artifact while shadow.data itself does not.
+          mkdir -p "out/$net/logs"
+
+          # Every warning and error any tor emitted, collapsed to one line per
+          # distinct message with a count. Addresses and digests are folded away
+          # so that 400 hosts reporting the same thing read as one line.
+          find "$net/shadow.data/hosts" -name '*.log' -print0 2>/dev/null |
+            xargs -0 grep -h -E '\[(warn|err)\]' 2>/dev/null |
+            sed -E 's/^[A-Za-z]{3} [0-9]{2} [0-9:.]+ //; s/[0-9A-F]{40}/<FP>/g;
+                    s/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/<IP>/g; s/[0-9]+/<N>/g' |
+            sort | uniq -c | sort -rn > "out/$net/logs/warnings-digest.txt" || true
+          echo "distinct warn/err messages: $(wc -l < "out/$net/logs/warnings-digest.txt")"
+
+          # One full log from each kind of host, so there is something to read
+          # in context when the digest raises a question.
+          for pat in '4uthority1' 'relay1exit' 'relay1guard' \
+                     'perfclient1exit' 'perfclient1onionservice' \
+                     'markovclient1exit'; do
+            d=$(find "$net/shadow.data/hosts" -maxdepth 1 -name "$pat" -type d | head -1)
+            [ -n "$d" ] || continue
+            for f in "$d"/*.log; do
+              [ -e "$f" ] || continue
+              # Bound each one: a host that went wrong can log without limit.
+              head -c 2000000 "$f" > "out/$net/logs/$pat.$(basename "$f")"
+            done
+          done
+
+          du -sh "out/$net/logs"
           find out -type f | sort
 
       - name: Upload this arm's results
