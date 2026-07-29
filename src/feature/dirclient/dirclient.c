@@ -2315,7 +2315,6 @@ handle_response_fetch_consensus(dir_connection_t *conn,
 
   /* update the list of routers and directory guards */
   routers_update_all_from_networkstatus(now, 3);
-  update_microdescs_from_networkstatus(now);
   directory_info_has_arrived(now, 0, 0);
 
   if (authdir_mode_v3(get_options())) {

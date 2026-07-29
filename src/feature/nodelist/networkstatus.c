@@ -298,7 +298,6 @@ router_reload_consensus_networkstatus(void)
   update_certificate_downloads(time(NULL));
 
   routers_update_all_from_networkstatus(time(NULL), 3);
-  update_microdescs_from_networkstatus(time(NULL));
 
   return 0;
 }
@@ -1691,6 +1690,15 @@ notify_after_networkstatus_changes(void)
    * such as hidden service and shared random. */
   dirauth_sched_recalculate_timing(options, now);
   reschedule_dirvote(options);
+
+  /* Mark these microdescriptors as still listed before the nodelist takes
+   * references to them. The cache is cleaned by last_listed, and a held entry
+   * whose time was never brought forward is exactly the "seemed very old, but
+   * is still marked as being held" warning. This belongs next to
+   * nodelist_set_consensus() rather than in each caller: every path that
+   * applies a consensus needs it, and the path that runs when certificates
+   * arrive for a consensus we were already holding has never had it. */
+  update_microdescs_from_networkstatus(now);
 
   nodelist_set_consensus(c);
 
