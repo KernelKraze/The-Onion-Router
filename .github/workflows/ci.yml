@@ -288,6 +288,10 @@ jobs:
       pct: ${{ steps.report.outputs.pct }}
       total: ${{ steps.report.outputs.total }}
       hit: ${{ steps.report.outputs.hit }}
+      excluded: ${{ steps.report.outputs.excluded }}
+      nodata: ${{ steps.report.outputs.nodata }}
+      strict: ${{ steps.report.outputs.strict }}
+      strict_total: ${{ steps.report.outputs.strict_total }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -338,64 +342,128 @@ jobs:
           # covered" -- that number is dominated by code we never touched.
           # It is "of the lines this branch adds, how many does anything
           # execute". Lines gcov marks with '-' are declarations, comments
-          # and braces; they are not counted either way.
+          # and braces; they are not counted either way. Lines the source
+          # marks LCOV_EXCL are set aside as well, but the count of them is
+          # reported: setting lines aside raises the ratio, so how many were
+          # set aside has to stay visible next to it.
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           mkdir -p covout
           ./scripts/test/coverage covout > /dev/null 2>&1 || true
           python3 - <<'EOF'
           import subprocess, os, re
+
           base = "origin/main"
-          files = subprocess.run(['git','diff','--name-only',base,'HEAD','--',
-              'src/lib/','src/core/','src/feature/','src/app/'],
-              capture_output=True,text=True).stdout.split()
-          files = [f for f in files if f.endswith('.c')]
-          print(f"{'file':<44}{'exec':>6}{'hit':>6}{'miss':>6}{'':>3}")
-          print("-"*68)
-          tc=tu=0; misses=[]
-          for f in files:
-              d = subprocess.run(['git','diff','-U0',base,'HEAD','--',f],
+
+          def added_lines(path):
+              """Line numbers this branch adds to <path>, taken from the diff."""
+              d = subprocess.run(['git','diff','-U0',base,'HEAD','--',path],
                                  capture_output=True,text=True).stdout
-              added=set(); cur=None
+              out=set(); cur=None
               for l in d.splitlines():
                   m=re.match(r'^@@ -\S+ \+(\d+)', l)
                   if m: cur=int(m.group(1)); continue
                   if cur is None: continue
                   if l.startswith('+') and not l.startswith('+++'):
-                      added.add(cur); cur+=1
+                      out.add(cur); cur+=1
                   elif l.startswith('-') and not l.startswith('---'):
                       pass
                   else:
                       cur+=1
+              return out
+
+          def excluded(path):
+              """Lines the source itself marks as not to be covered.
+
+              gcov knows nothing about LCOV_EXCL; only lcov and genhtml read those
+              markers. Counting raw .gcov without them charges us for code the
+              project has declared unreachable, such as assert-unreached branches.
+              """
+              ex=set(); start=None
+              try:
+                  with open(path, errors='replace') as fh:
+                      for n,l in enumerate(fh,1):
+                          if 'LCOV_EXCL_LINE' in l: ex.add(n)
+                          elif 'LCOV_EXCL_START' in l: start=n
+                          elif 'LCOV_EXCL_STOP' in l and start is not None:
+                              ex.update(range(start,n+1)); start=None
+              except OSError:
+                  pass
+              return ex
+
+          def looks_executable(text):
+              """Whether a line is the sort gcov would attach a count to."""
+              t=text.strip()
+              if not t: return False
+              if t.startswith(('//','/*','*','#')): return False
+              return t not in ('{','}','};',')',');','else','do')
+
+          files = subprocess.run(['git','diff','--name-only',base,'HEAD','--',
+              'src/lib/','src/core/','src/feature/','src/app/'],
+              capture_output=True,text=True).stdout.split()
+          files = [f for f in files if f.endswith('.c')]
+
+          print(f"{'file':<44}{'exec':>6}{'hit':>6}{'miss':>6}{'excl':>6}{'':>3}")
+          print("-"*74)
+          tc=tu=nx=nd=0; misses=[]; nodata=[]
+          for f in files:
+              added=added_lines(f)
               if not added: continue
-              gf = os.path.join('covout', os.path.basename(f)+'.gcov')
+              ex=excluded(f)
+              gf=os.path.join('covout', os.path.basename(f)+'.gcov')
               if not os.path.exists(gf):
-                  print(f"{f:<44}{'':>6}{'':>6}{'':>6}   no gcov")
+                  # No .gcov: this build never compiled the file, so nothing in it
+                  # ran. Dropping it would quietly raise the percentage.
+                  try:
+                      src=open(f, errors='replace').read().splitlines()
+                  except OSError:
+                      src=[]
+                  n=sum(1 for ln in sorted(added)
+                        if ln not in ex and ln<=len(src) and looks_executable(src[ln-1]))
+                  nd+=n; nodata.append((f,n))
+                  print(f"{f:<44}{'':>6}{'':>6}{'':>6}{'':>6}   {n} line(s), no coverage data")
                   continue
-              hit=miss=0; ml=[]
+              hit=miss=exc=0; ml=[]
               for gl in open(gf, errors='replace'):
                   mm=re.match(r'\s*([#\-0-9]+)\s*:\s*(\d+):', gl)
                   if not mm: continue
                   cnt,ln = mm.group(1), int(mm.group(2))
                   if ln not in added or cnt=='-': continue
+                  # Counted separately rather than dropped: setting lines aside
+                  # raises the ratio, so the amount set aside has to stay visible.
+                  if ln in ex: exc+=1; continue
                   if cnt.startswith('#'): miss+=1; ml.append(ln)
                   else: hit+=1
-              tc+=hit; tu+=miss
-              print(f"{f:<44}{hit+miss:>6}{hit:>6}{miss:>6}")
+              tc+=hit; tu+=miss; nx+=exc
+              print(f"{f:<44}{hit+miss:>6}{hit:>6}{miss:>6}{exc:>6}")
               if ml: misses.append((f,ml))
-          print("-"*68)
+          print("-"*74)
           total=tc+tu
           pct = tc/total*100 if total else 100.0
-          print(f"{'total':<44}{total:>6}{tc:>6}{tu:>6}   {pct:.1f}%")
-          # Hand the same numbers to the release notes. Recomputing them
-          # there, or copying them in by hand, would let the two disagree.
+          print(f"{'total':<44}{total:>6}{tc:>6}{tu:>6}{nx:>6}   {pct:.1f}%")
+
+          # Two figures, not one. The first is over the lines this build can
+          # measure; the second additionally charges us for the LCOV_EXCL regions
+          # and for files it never compiled. Publishing only the first would be
+          # reporting the more flattering of two numbers we already know.
+          strict_total = total + nx + nd
+          strict = tc/strict_total*100 if strict_total else 100.0
+          print(f"{'strict (counts excluded and unbuilt)':<44}"
+                f"{strict_total:>6}{tc:>6}{strict_total-tc:>6}{'':>6}   {strict:.1f}%")
+
           gh = os.environ.get('GITHUB_OUTPUT')
           if gh:
-              with open(gh, 'a') as fh:
+              with open(gh,'a') as fh:
                   fh.write(f"pct={pct:.1f}\n")
                   fh.write(f"total={total}\n")
                   fh.write(f"hit={tc}\n")
+                  fh.write(f"excluded={nx}\n")
+                  fh.write(f"nodata={nd}\n")
+                  fh.write(f"strict={strict:.1f}\n")
+                  fh.write(f"strict_total={strict_total}\n")
           for f,ml in misses:
               print(f"\n  {f} not executed: {ml}")
+          for f,n in nodata:
+              print(f"\n  {f}: {n} line(s) with no coverage data, counted as missed")
           EOF
 
       - name: Upload gcov output
@@ -777,14 +845,9 @@ jobs:
           body: |
             Automated pre-release from ci/github-actions branch.
 
-            Built from ${{ env.SHORT_SHA }}. Every binary here carries that
-            string: `tor --version` prints `(git-${{ env.SHORT_SHA }})`, so a
-            binary can always be matched back to its source.
+            Built from ${{ env.SHORT_SHA }}. Every binary here carries that string: `tor --version` prints `(git-${{ env.SHORT_SHA }})`, so a binary can always be matched back to its source.
 
-            Of the lines this branch changes, the tests execute
-            ${{ needs.coverage.outputs.hit }} of ${{ needs.coverage.outputs.total }}
-            (${{ needs.coverage.outputs.pct }}%). This counts only lines that
-            differ from upstream main, not the whole tree.
+            Test coverage of this branch's own changes: ${{ needs.coverage.outputs.hit }} of ${{ needs.coverage.outputs.total }} executable lines (${{ needs.coverage.outputs.pct }}%). The denominator is the lines this branch adds on top of this repository's `main`, leaving out comments and declarations. Two things are set aside from it: ${{ needs.coverage.outputs.excluded }} line(s) the source marks `LCOV_EXCL` as unreachable, and ${{ needs.coverage.outputs.nodata }} line(s) in files this build does not compile. Charging both as untested gives ${{ needs.coverage.outputs.strict }}% of ${{ needs.coverage.outputs.strict_total }}. Neither figure says anything about the tree as a whole.
 
             Includes production (stripped, optimized) and debug (fragile-hardening, with symbols) builds for:
             - Ubuntu 22.04 (gcc)
@@ -798,15 +861,9 @@ jobs:
 
             Naming: `<platform>-<cc>-[production|debug]`
 
-            Production binaries are stripped and need nothing beyond the
-            usual libevent/openssl/zlib for the platform. The Windows one is
-            statically linked and needs no mingw DLLs.
+            Production binaries are stripped and need nothing beyond the usual libevent/openssl/zlib for the platform. The Windows one is statically linked and needs no mingw DLLs.
 
-            Debug binaries are built with --enable-fragile-hardening, which
-            links AddressSanitizer. gcc links that runtime as a shared
-            library and clang on Linux links it into the binary, so only some
-            of these need anything installed. Where one is listed, the binary
-            will not start without it:
+            Debug binaries are built with --enable-fragile-hardening, which links AddressSanitizer. gcc links that runtime as a shared library while clang on Linux links it into the binary, so only some of these need anything installed. Where one is listed, the binary will not start without it:
 
             - tor-debug-ubuntu-22.04-gcc, tor-debug-ubuntu-22.04-arm-gcc
               `apt install libasan6`
