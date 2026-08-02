@@ -8,6 +8,7 @@
  * Default: free while workers are busy (lost-wakeup path). */
 #include "orconfig.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "lib/evloop/workqueue.h"
 #include "lib/crypt_ops/crypto_init.h"
@@ -69,7 +70,18 @@ main(int argc, char **argv)
   init_logging(1);
   if (crypto_global_init(0, NULL, NULL) < 0)
     return 2;
-  for (int iter = 1; iter <= 50; iter++) {
+  /* Valgrind runs this two orders of magnitude slower than native, so let it
+   * ask for fewer rounds rather than making everyone else wait. */
+  int iters = 50;
+  {
+    const char *e = getenv("REPRO_ITERS");
+    if (e) {
+      int v = atoi(e);
+      if (v > 0)
+        iters = v;
+    }
+  }
+  for (int iter = 1; iter <= iters; iter++) {
     replyqueue_t *rq = replyqueue_new(0);
     if (!rq) { printf("iter %d: replyqueue_new failed\n", iter); return 2; }
     threadpool_t *tp = threadpool_new(8, rq, new_state, free_state, NULL);
@@ -77,10 +89,16 @@ main(int argc, char **argv)
     for (int i = 0; i < 200; i++)
       threadpool_queue_work(tp, work_fn, reply_fn, NULL);
     if (update) {
-      if (threadpool_queue_update(tp, dup_update_arg, update_fn,
-                                  free_update_arg, NULL) < 0) {
-        printf("iter %d: queue_update failed\n", iter);
-        return 2;
+      /* Queue twice. The second call is the only thing that reaches the
+       * branch in threadpool_queue_update() that frees the previous round's
+       * arguments; with a single call, coverage shows those lines never
+       * running, and they are the same ownership path as #41209. */
+      for (int u = 0; u < 2; u++) {
+        if (threadpool_queue_update(tp, dup_update_arg, update_fn,
+                                    free_update_arg, NULL) < 0) {
+          printf("iter %d: queue_update failed\n", iter);
+          return 2;
+        }
       }
     }
     if (idle)
