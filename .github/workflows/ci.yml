@@ -254,6 +254,119 @@ jobs:
           timeout 300 ./repro idle
           timeout 300 ./repro update
 
+  coverage:
+    name: Coverage of our own changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need upstream/main to work out which lines are ours.
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential automake autoconf \
+            libtool pkg-config libevent-dev libssl-dev zlib1g-dev \
+            liblzma-dev libzstd-dev
+
+      - name: Build instrumented
+        run: |
+          ./autogen.sh
+          ./configure --enable-coverage --disable-asciidoc
+          # git_revision.c includes micro-revision.i, and the rule that
+          # declares that dependency names an object automake never emits.
+          make micro-revision.i
+          make -j"$(nproc)"
+
+      - name: Run the tests
+        run: |
+          # Not "make check": that reruns configure-time checks and is
+          # slower than driving the binaries, and a failing test here should
+          # not hide the coverage numbers -- the other jobs already gate on
+          # the results.
+          ./src/test/test || true
+          ./src/test/test_workqueue || true
+          for v in cancel efd efd2 pipe pipe2 socketpair; do
+            sh "src/test/test_workqueue_${v}.sh" || true
+          done
+          gcc -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS --coverage -O0 -g \
+            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
+            -I./src/ext/equix/hashx/include \
+            -c scripts/ci/repro_41148.c -o repro.o
+          gcc --coverage -o repro repro.o src/test/libtor-testing.a \
+            -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
+          ./repro || true
+          ./repro idle || true
+          ./repro update || true
+
+      - name: Report
+        run: |
+          # The question this job answers is not "how much of tor is
+          # covered" -- that number is dominated by code we never touched.
+          # It is "of the lines this branch adds, how many does anything
+          # execute". Lines gcov marks with '-' are declarations, comments
+          # and braces; they are not counted either way.
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          mkdir -p covout
+          ./scripts/test/coverage covout > /dev/null 2>&1 || true
+          python3 - <<'EOF'
+          import subprocess, os, re
+          base = "origin/main"
+          files = subprocess.run(['git','diff','--name-only',base,'HEAD','--',
+              'src/lib/','src/core/','src/feature/','src/app/'],
+              capture_output=True,text=True).stdout.split()
+          files = [f for f in files if f.endswith('.c')]
+          print(f"{'file':<44}{'exec':>6}{'hit':>6}{'miss':>6}{'':>3}")
+          print("-"*68)
+          tc=tu=0; misses=[]
+          for f in files:
+              d = subprocess.run(['git','diff','-U0',base,'HEAD','--',f],
+                                 capture_output=True,text=True).stdout
+              added=set(); cur=None
+              for l in d.splitlines():
+                  m=re.match(r'^@@ -\S+ \+(\d+)', l)
+                  if m: cur=int(m.group(1)); continue
+                  if cur is None: continue
+                  if l.startswith('+') and not l.startswith('+++'):
+                      added.add(cur); cur+=1
+                  elif l.startswith('-') and not l.startswith('---'):
+                      pass
+                  else:
+                      cur+=1
+              if not added: continue
+              gf = os.path.join('covout', os.path.basename(f)+'.gcov')
+              if not os.path.exists(gf):
+                  print(f"{f:<44}{'':>6}{'':>6}{'':>6}   no gcov")
+                  continue
+              hit=miss=0; ml=[]
+              for gl in open(gf, errors='replace'):
+                  mm=re.match(r'\s*([#\-0-9]+)\s*:\s*(\d+):', gl)
+                  if not mm: continue
+                  cnt,ln = mm.group(1), int(mm.group(2))
+                  if ln not in added or cnt=='-': continue
+                  if cnt.startswith('#'): miss+=1; ml.append(ln)
+                  else: hit+=1
+              tc+=hit; tu+=miss
+              print(f"{f:<44}{hit+miss:>6}{hit:>6}{miss:>6}")
+              if ml: misses.append((f,ml))
+          print("-"*68)
+          total=tc+tu
+          pct = tc/total*100 if total else 100.0
+          print(f"{'total':<44}{total:>6}{tc:>6}{tu:>6}   {pct:.1f}%")
+          for f,ml in misses:
+              print(f"\n  {f} not executed: {ml}")
+          EOF
+
+      - name: Upload gcov output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-gcov
+          path: covout/
+          retention-days: 7
+
   valgrind-fds:
     name: Valgrind file descriptors
     runs-on: ubuntu-24.04
