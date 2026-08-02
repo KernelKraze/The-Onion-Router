@@ -348,9 +348,9 @@ jobs:
             fi
             tail -12 "vg-$name.log"
           }
-          REPRO_ITERS=2 run_one busy   ./repro
-          REPRO_ITERS=2 run_one idle   ./repro idle
-          REPRO_ITERS=2 run_one update ./repro update
+          REPRO_ITERS=20 run_one busy   ./repro
+          REPRO_ITERS=20 run_one idle   ./repro idle
+          REPRO_ITERS=20 run_one update ./repro update
           run_one unittest ./src/test/test_workqueue
           exit $status
 
@@ -363,16 +363,24 @@ jobs:
           # exactly this family -- workers reaching for a mutex the main
           # thread had already freed.
           #
-          # It is not gating yet. helgrind does not understand C11 atomics,
-          # which this tree uses for the log severity, so a clean baseline has
-          # to be established before a failure here can mean anything.
-          REPRO_ITERS=1 valgrind --tool=helgrind \
-            ./repro > vg-helgrind.log 2>&1 || true
-          echo "== summary"
-          grep -E 'ERROR SUMMARY|Thread #|lock order|not locked|destroy' \
-            vg-helgrind.log | head -40 || true
-          echo "== full log tail"
-          tail -30 vg-helgrind.log
+          # It is not gating yet. helgrind has no model of C11 atomics, which
+          # this tree uses for the log severity, so a clean baseline has to
+          # hold for a while before a failure here can mean anything.
+          #
+          # The first run took one second for one round, so the round count
+          # was costing coverage and buying nothing. All three teardown
+          # shapes, twenty rounds each.
+          status=0
+          for mode in "" idle update; do
+            echo "== ${mode:-busy}"
+            REPRO_ITERS=20 valgrind --tool=helgrind \
+              ./repro $mode > "vg-helgrind-${mode:-busy}.log" 2>&1 || status=1
+            grep -E 'ERROR SUMMARY' "vg-helgrind-${mode:-busy}.log" || true
+            grep -E 'lock order|not locked|Thread #[0-9]+ (unlocked|was created)' \
+              "vg-helgrind-${mode:-busy}.log" | head -20 || true
+          done
+          [ "$status" -eq 0 ] || echo "::warning::helgrind reported something; \
+          read the artifact before promoting this step to gating"
       - name: Upload valgrind logs
         if: always()
         uses: actions/upload-artifact@v4
