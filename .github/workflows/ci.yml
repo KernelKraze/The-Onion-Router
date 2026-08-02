@@ -114,8 +114,47 @@ jobs:
       - name: Prepare production binary
         run: |
           plat="${{ matrix.os }}-${{ matrix.cc }}"
-          cp src/app/tor "src/app/tor-production-${plat}"
-          strip "src/app/tor-production-${plat}" 2>/dev/null || :
+          bin="src/app/tor-production-${plat}"
+          cp src/app/tor "$bin"
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # Split rather than discard. Stripping used to throw the symbols
+            # away, which left nothing able to profile or backtrace the
+            # binary we actually publish: the hardened build is a separate
+            # compilation and carries a different GNU build-id, which is the
+            # value gdb and perf pair a binary with its symbols by, so it
+            # cannot stand in. Extract first, strip second, and record the
+            # link, so the two halves stay matched.
+            objcopy --only-keep-debug "$bin" "$bin.debug"
+            strip "$bin"
+            objcopy --add-gnu-debuglink="$bin.debug" "$bin"
+          else
+            strip "$bin" 2>/dev/null || :
+          fi
+
+      - name: Check the debuginfo matches the binary
+        if: runner.os == 'Linux'
+        run: |
+          plat="${{ matrix.os }}-${{ matrix.cc }}"
+          bin="src/app/tor-production-${plat}"
+          id_bin=$(readelf -n "$bin" | awk '/Build ID/{print $3}')
+          id_dbg=$(readelf -n "$bin.debug" | awk '/Build ID/{print $3}')
+          echo "binary    $id_bin"
+          echo "debuginfo $id_dbg"
+          # Unequal ids mean the pair would be rejected by every tool that
+          # checks them, which is the failure this whole step exists to
+          # avoid; an empty id means something dropped the note section.
+          if [ -z "$id_bin" ] || [ "$id_bin" != "$id_dbg" ]; then
+            echo "::error::build ids do not match, the debuginfo is unusable"
+            exit 1
+          fi
+          if ! readelf -S "$bin.debug" | grep -q '\.debug_info'; then
+            echo "::error::$bin.debug carries no DWARF"
+            exit 1
+          fi
+          if file "$bin" | grep -q 'not stripped'; then
+            echo "::error::$bin was not stripped"
+            exit 1
+          fi
 
       - name: Build hardened (debug) binary
         run: |
@@ -146,6 +185,16 @@ jobs:
         with:
           name: tor-${{ matrix.os }}-${{ matrix.cc }}-debug
           path: src/app/tor-debug-${{ matrix.os }}-${{ matrix.cc }}
+          retention-days: 30
+
+      # Linux only: this is an ELF .debug file, and the macOS equivalent
+      # would be a .dSYM bundle produced by a different tool.
+      - name: Upload debuginfo artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tor-${{ matrix.os }}-${{ matrix.cc }}-debuginfo
+          path: src/app/tor-production-${{ matrix.os }}-${{ matrix.cc }}.debug
           retention-days: 30
 
   tsan-workqueue:
@@ -876,6 +925,8 @@ jobs:
               nothing
             - Windows: no debug binary is published, the mingw environment
               has no AddressSanitizer runtime
+
+            Each Linux production binary has a matching `*-debuginfo` file. Download both, keep them in the same directory, and gdb and perf will find the symbols on their own: the pair is matched by GNU build-id, which makes this the only artifact that can symbolicate the binary you are actually running. The hardened debug binary is a separate compilation with a different build-id and cannot stand in for it. Profile with `perf record --call-graph dwarf`, since the production build carries no frame pointers.
 
             ⚠️ Found a bug? Please open an issue at
             https://github.com/KernelKraze/The-Onion-Router/issues
