@@ -733,6 +733,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Ahead of the download, which is only ordering: checkout cleans the
+      # workspace and would remove the artifacts if it ran second. The tree
+      # is wanted for configure.ac, to read the version out of.
+      - uses: actions/checkout@v4
+
       # Without a pattern this takes every artifact the run produced. The
       # coverage and valgrind jobs are not in "needs", but they usually
       # finish first, so their output was being attached to the release:
@@ -747,11 +752,19 @@ jobs:
 
       - name: Generate release tag
         run: |
-          echo "RELEASE_TAG=0.4.8.18-dev.$(date +%Y%m%d.%H%M%S)" >> $GITHUB_ENV
+          # The version was written out here by hand and had gone stale: the
+          # tag said 0.4.8.18-dev while configure.ac, and so every binary in
+          # the release, said 0.5.0.0-alpha-dev. Read it from the file the
+          # build reads, and the two cannot drift apart again.
+          ver=$(sed -n 's/^AC_INIT(\[tor\],\[\(.*\)\])$/\1/p' configure.ac)
+          if [ -z "$ver" ]; then
+            echo "::error::no version found in configure.ac; refusing to tag"
+            exit 1
+          fi
+          echo "RELEASE_TAG=${ver}.$(date +%Y%m%d.%H%M%S)" >> $GITHUB_ENV
           # Sixteen characters because that is what "git rev-parse --short=16"
           # writes into micro-revision.i, so this matches the string the
-          # binaries print byte for byte. No checkout is needed: the SHA of
-          # the commit that triggered the run is already in the context.
+          # binaries print byte for byte.
           echo "SHORT_SHA=${GITHUB_SHA::16}" >> $GITHUB_ENV
 
       - name: Create pre-release
