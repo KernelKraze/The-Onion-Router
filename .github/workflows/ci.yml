@@ -276,6 +276,11 @@ jobs:
           # allocator and cannot be combined. -g so the leak report names
           # the line that opened the descriptor.
           ./configure --disable-asciidoc CFLAGS="-O1 -g"
+          # git_revision.c includes micro-revision.i, but the rule that
+          # declares that dependency names an object file that automake does
+          # not actually produce, so nothing orders the two. A full "make"
+          # gets away with it; asking for one target does not.
+          make micro-revision.i
           make -j"$(nproc)" src/test/test_workqueue
 
       - name: Build the reproducer
