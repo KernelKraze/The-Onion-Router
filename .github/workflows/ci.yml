@@ -322,17 +322,28 @@ jobs:
             [ "$rc" -eq 0 ] || { echo "::error::memcheck exited $rc on $name"; status=1; }
             # Before valgrind 3.24 a leaked descriptor is reported but does
             # not count as an error, so --error-exitcode alone would let one
-            # through. Read the summary instead. Three descriptors are the
-            # inherited std streams; anything above that is ours.
-            open=$(sed -n 's/.*FILE DESCRIPTORS: \([0-9]*\) open.*/\1/p' \
-                   "vg-$name.log" | tail -1)
-            echo "   descriptors open at exit: ${open:-unreadable}"
-            if [ -z "$open" ]; then
-              echo "::error::$name: no descriptor summary; did --track-fds work?"
+            # through. Read the report instead.
+            #
+            # Counting is not enough either. valgrind's total covers the three
+            # std streams, whatever the runner handed down (two here, listed
+            # as "inherited from parent"), and libevent's epoll and signal
+            # pipes, which test_workqueue leaves open because it never tears
+            # its event base down. None of those are ours. What is ours comes
+            # from socketpair or eventfd inside alert_sockets_create, so look
+            # for a descriptor whose backtrace names that.
+            if ! grep -q 'FILE DESCRIPTORS:' "vg-$name.log"; then
+              echo "::error::$name: no descriptor report; did --track-fds work?"
               status=1
-            elif [ "$open" -gt 3 ]; then
-              echo "::error::$name: $open descriptors open at exit, expected 3"
-              grep -B2 -A8 'Open file descriptor' "vg-$name.log" | head -60
+            fi
+            echo "   $(grep -m1 'FILE DESCRIPTORS:' "vg-$name.log" | \
+                       sed 's/^==[0-9]*== //')"
+            ours=$(grep -A6 'Open file descriptor' "vg-$name.log" | \
+                   grep -c 'alert_sockets_create\|replyqueue_new' || true)
+            if [ "${ours:-0}" -gt 0 ]; then
+              echo "::error::$name: $ours descriptor(s) from the reply queue \
+          still open at exit"
+              grep -B2 -A8 'alert_sockets_create\|replyqueue_new' \
+                "vg-$name.log" | head -60
               status=1
             fi
             tail -12 "vg-$name.log"
