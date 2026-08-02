@@ -711,6 +711,8 @@ jobs:
             Includes production (stripped, optimized) and debug (fragile-hardening, with symbols) builds for:
             - Ubuntu 22.04 (gcc)
             - Ubuntu 24.04 (clang)
+            - Ubuntu 22.04 arm64 (gcc)
+            - Ubuntu 24.04 arm64 (clang)
             - macOS 14 (clang)
             - macOS 15 (clang)
             - Raspberry Pi aarch64 (QEMU arm64 container)
