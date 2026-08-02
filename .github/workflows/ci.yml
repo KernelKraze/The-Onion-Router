@@ -719,9 +719,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Without a pattern this takes every artifact the run produced. The
+      # coverage and valgrind jobs are not in "needs", but they usually
+      # finish first, so their output was being attached to the release:
+      # roughly three hundred .gcov files and seven valgrind logs, none of
+      # which anyone downloading a binary wants. The binary artifacts are
+      # the ones named tor-*.
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: tor-*
           merge-multiple: true
 
       - name: Generate release tag
