@@ -544,6 +544,7 @@ jobs:
           update: false
           install: >-
             base-devel autotools autoconf2.71
+            git
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-openssl
@@ -553,6 +554,11 @@ jobs:
         env:
           WANT_AUTOCONF: "2.71"
         run: |
+          # The revision is only embedded when git can read this checkout.
+          # MSYS2 git and the Windows checkout disagree about ownership
+          # often enough that it is worth saying the path is trusted; the
+          # runner is thrown away after the job.
+          git config --global --add safe.directory '*'
           autoreconf-2.71 -if || autoreconf -if
           # Link openssl/libevent/zlib and the mingw runtime statically so the
           # published tor.exe is self-contained: users download one file and
@@ -568,6 +574,16 @@ jobs:
 
       - name: Prepare production binary
         run: |
+          # This shipped an empty revision for as long as the job existed,
+          # which is invisible unless someone reads the string. Fail loudly
+          # instead: a binary that cannot name its commit is not much use
+          # for reporting a bug against.
+          rev=$(cat micro-revision.i)
+          echo "micro-revision.i: $rev"
+          if [ "$rev" = '""' ]; then
+            echo "::error::no git revision embedded; tor --version will not name a commit"
+            exit 1
+          fi
           cp src/app/tor.exe src/app/tor-production-windows-mingw64.exe
           strip src/app/tor-production-windows-mingw64.exe 2>/dev/null || :
 
@@ -626,10 +642,23 @@ jobs:
             apt-get update -q
             apt-get install -y -q build-essential automake autoconf \
               libtool pkg-config libevent-dev libssl-dev zlib1g-dev \
-              liblzma-dev libzstd-dev
+              liblzma-dev libzstd-dev git
+            # micro-revision.i is only written when both a .git and a git
+            # binary are present, and this image ships neither by default,
+            # so the binary went out reporting an empty revision. The
+            # checkout is bind-mounted and owned by the runner user while
+            # this shell is root, which git refuses to read as its own
+            # repository unless told the path is trusted.
+            git config --global --add safe.directory /work
             ./autogen.sh
             ./configure --disable-asciidoc
             make -j4 src/app/tor
+            rev=\$(cat micro-revision.i)
+            echo \"micro-revision.i: \$rev\"
+            if [ \"\$rev\" = '\"\"' ]; then
+              echo '::error::no git revision embedded; tor --version will not name a commit'
+              exit 1
+            fi
             cp src/app/tor src/app/tor-production-raspberry-pi-aarch64
             strip src/app/tor-production-raspberry-pi-aarch64
 
