@@ -112,12 +112,27 @@ crypto_global_init(int useAccel, const char *accelName, const char *accelDir)
     {
       crypto_pk_t *warmup_key = crypto_pk_new();
       if (warmup_key) {
+        /* Say so when this does not happen. Skipping it silently leaves
+         * the generator to be initialized by whichever worker thread signs
+         * first, which is the crash this exists to prevent, and nothing
+         * else would report that the guard is missing. */
         if (crypto_pk_generate_key_with_bits(warmup_key, 1024) == 0) {
           unsigned char dummy_msg[20] = {0};
+          /* Sized for the 1024-bit key above: crypto_pk_private_sign()
+           * asserts that this is at least the length of the modulus. */
           unsigned char dummy_sig[128];
-          crypto_pk_private_sign(warmup_key, (char*)dummy_sig,
-                                 sizeof(dummy_sig),
-                                 (char*)dummy_msg, sizeof(dummy_msg));
+          if (crypto_pk_private_sign(warmup_key, (char*)dummy_sig,
+                                     sizeof(dummy_sig),
+                                     (char*)dummy_msg,
+                                     sizeof(dummy_msg)) < 0) {
+            log_warn(LD_CRYPTO, "Could not sign with a throwaway key to "
+                     "initialize OpenSSL's random generator up front. It "
+                     "will be initialized on first use instead.");
+          }
+        } else {
+          log_warn(LD_CRYPTO, "Could not generate a throwaway key to "
+                   "initialize OpenSSL's random generator up front. It "
+                   "will be initialized on first use instead.");
         }
         crypto_pk_free(warmup_key);
       }
