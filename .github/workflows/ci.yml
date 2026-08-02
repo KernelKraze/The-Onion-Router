@@ -284,6 +284,10 @@ jobs:
     name: Coverage of our own changes
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    outputs:
+      pct: ${{ steps.report.outputs.pct }}
+      total: ${{ steps.report.outputs.total }}
+      hit: ${{ steps.report.outputs.hit }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -328,6 +332,7 @@ jobs:
           ./repro update || true
 
       - name: Report
+        id: report
         run: |
           # The question this job answers is not "how much of tor is
           # covered" -- that number is dominated by code we never touched.
@@ -381,6 +386,14 @@ jobs:
           total=tc+tu
           pct = tc/total*100 if total else 100.0
           print(f"{'total':<44}{total:>6}{tc:>6}{tu:>6}   {pct:.1f}%")
+          # Hand the same numbers to the release notes. Recomputing them
+          # there, or copying them in by hand, would let the two disagree.
+          gh = os.environ.get('GITHUB_OUTPUT')
+          if gh:
+              with open(gh, 'a') as fh:
+                  fh.write(f"pct={pct:.1f}\n")
+                  fh.write(f"total={total}\n")
+                  fh.write(f"hit={tc}\n")
           for f,ml in misses:
               print(f"\n  {f} not executed: {ml}")
           EOF
@@ -714,7 +727,8 @@ jobs:
 
   publish-pre-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/ci/github-actions'
-    needs: [build-test, tsan-workqueue, asan-workqueue, windows-mingw, raspberry-pi]
+    needs: [build-test, tsan-workqueue, asan-workqueue, windows-mingw,
+            raspberry-pi, coverage]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -732,7 +746,13 @@ jobs:
           merge-multiple: true
 
       - name: Generate release tag
-        run: echo "RELEASE_TAG=0.4.8.18-dev.$(date +%Y%m%d.%H%M%S)" >> $GITHUB_ENV
+        run: |
+          echo "RELEASE_TAG=0.4.8.18-dev.$(date +%Y%m%d.%H%M%S)" >> $GITHUB_ENV
+          # Sixteen characters because that is what "git rev-parse --short=16"
+          # writes into micro-revision.i, so this matches the string the
+          # binaries print byte for byte. No checkout is needed: the SHA of
+          # the commit that triggered the run is already in the context.
+          echo "SHORT_SHA=${GITHUB_SHA::16}" >> $GITHUB_ENV
 
       - name: Create pre-release
         uses: softprops/action-gh-release@v2
@@ -744,6 +764,15 @@ jobs:
           body: |
             Automated pre-release from ci/github-actions branch.
 
+            Built from ${{ env.SHORT_SHA }}. Every binary here carries that
+            string: `tor --version` prints `(git-${{ env.SHORT_SHA }})`, so a
+            binary can always be matched back to its source.
+
+            Of the lines this branch changes, the tests execute
+            ${{ needs.coverage.outputs.hit }} of ${{ needs.coverage.outputs.total }}
+            (${{ needs.coverage.outputs.pct }}%). This counts only lines that
+            differ from upstream main, not the whole tree.
+
             Includes production (stripped, optimized) and debug (fragile-hardening, with symbols) builds for:
             - Ubuntu 22.04 (gcc)
             - Ubuntu 24.04 (clang)
@@ -752,9 +781,32 @@ jobs:
             - macOS 14 (clang)
             - macOS 15 (clang)
             - Raspberry Pi aarch64 (QEMU arm64 container)
-            - Windows mingw64
+            - Windows mingw64 (production only)
 
             Naming: `<platform>-<cc>-[production|debug]`
+
+            Production binaries are stripped and need nothing beyond the
+            usual libevent/openssl/zlib for the platform. The Windows one is
+            statically linked and needs no mingw DLLs.
+
+            Debug binaries are built with --enable-fragile-hardening, which
+            links AddressSanitizer. gcc links that runtime as a shared
+            library and clang on Linux links it into the binary, so only some
+            of these need anything installed. Where one is listed, the binary
+            will not start without it:
+
+            - tor-debug-ubuntu-22.04-gcc, tor-debug-ubuntu-22.04-arm-gcc
+              `apt install libasan6`
+            - tor-debug-raspberry-pi-aarch64
+              `apt install libasan8`
+            - tor-debug-macos-14-clang, tor-debug-macos-15-clang
+              libclang_rt.asan_osx_dynamic.dylib, from a matching Xcode or
+              LLVM install; there is no package for it on its own
+            - tor-debug-ubuntu-24.04-clang, tor-debug-ubuntu-24.04-arm-clang
+              nothing
+            - Windows: no debug binary is published, the mingw environment
+              has no AddressSanitizer runtime
+
             ⚠️ Found a bug? Please open an issue at
             https://github.com/KernelKraze/The-Onion-Router/issues
           files: artifacts/*
