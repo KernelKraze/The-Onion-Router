@@ -24,6 +24,12 @@ jobs:
             cc: gcc
           - os: ubuntu-24.04
             cc: clang
+          # Same two Linux builds on aarch64. The steps below branch on
+          # runner.os, not on this string, so they need no arm64 case.
+          - os: ubuntu-22.04-arm
+            cc: gcc
+          - os: ubuntu-24.04-arm
+            cc: clang
           - os: macos-14
             cc: clang
           - os: macos-15
@@ -143,9 +149,17 @@ jobs:
           retention-days: 30
 
   tsan-workqueue:
-    name: TSan workqueue
-    runs-on: ubuntu-24.04
+    name: TSan workqueue (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -200,9 +214,17 @@ jobs:
           timeout 300 ./repro update
 
   asan-workqueue:
-    name: ASan/UBSan workqueue
-    runs-on: ubuntu-24.04
+    name: ASan/UBSan workqueue (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
