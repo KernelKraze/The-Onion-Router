@@ -1,0 +1,14 @@
+name: ARM runner probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Report the machine
+        run: |
+          uname -m
+          nproc
+          cat /proc/cpuinfo | grep -m1 'model name' || true
+          echo "--- 这是原生 ARM 还是模拟 ---"
+          lscpu | grep -E 'Architecture|Model name|CPU\(s\)' | head -4
