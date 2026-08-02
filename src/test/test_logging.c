@@ -181,9 +181,59 @@ test_ratelim(void *arg)
   tor_free(msg);
 }
 
+/* log_message_is_interesting() answers, without taking the log mutex,
+ * whether a message at this severity could reach any log at all. Worker
+ * threads are its reason to exist: they can ask before paying for a
+ * formatted message. That makes the answer worth pinning down, because
+ * a stale one either drops messages or does the formatting work for
+ * nothing. */
+static void
+test_severity_is_interesting(void *arg)
+{
+  log_severity_list_t warn_only, debug_all;
+  (void) arg;
+
+  init_logging(1);
+  mark_logs_temp();
+  close_temp_logs();
+
+  /* get_min_log_level() starts its search at LOG_ERR, so errors stay
+   * interesting even with no log attached; nothing below that does. */
+  tt_int_op(log_message_is_interesting(LOG_ERR, LD_GENERAL), OP_EQ, 1);
+  tt_int_op(log_message_is_interesting(LOG_WARN, LD_GENERAL), OP_EQ, 0);
+
+  set_log_severity_config(LOG_WARN, LOG_ERR, &warn_only);
+  add_callback_log(&warn_only, dummy_cb_fn);
+
+  tt_int_op(log_message_is_interesting(LOG_ERR, LD_GENERAL), OP_EQ, 1);
+  tt_int_op(log_message_is_interesting(LOG_WARN, LD_GENERAL), OP_EQ, 1);
+  tt_int_op(log_message_is_interesting(LOG_NOTICE, LD_GENERAL), OP_EQ, 0);
+  tt_int_op(log_message_is_interesting(LOG_DEBUG, LD_GENERAL), OP_EQ, 0);
+
+  /* Widening the configuration has to be visible here immediately: this is
+   * the value the workers read, and it is cached rather than recomputed. */
+  set_log_severity_config(LOG_DEBUG, LOG_ERR, &debug_all);
+  add_callback_log(&debug_all, dummy_cb_fn);
+
+  tt_int_op(log_message_is_interesting(LOG_DEBUG, LD_GENERAL), OP_EQ, 1);
+  tt_int_op(log_message_is_interesting(LOG_INFO, LD_GENERAL), OP_EQ, 1);
+
+  /* And narrowing it again by dropping every log: back to the floor. */
+  mark_logs_temp();
+  close_temp_logs();
+  tt_int_op(log_message_is_interesting(LOG_DEBUG, LD_GENERAL), OP_EQ, 0);
+  tt_int_op(log_message_is_interesting(LOG_WARN, LD_GENERAL), OP_EQ, 0);
+  tt_int_op(log_message_is_interesting(LOG_ERR, LD_GENERAL), OP_EQ, 1);
+
+ done:
+  ;
+}
+
 struct testcase_t logging_tests[] = {
   { "sigsafe_err_fds", test_get_sigsafe_err_fds, TT_FORK, NULL, NULL },
   { "sigsafe_err", test_sigsafe_err, TT_FORK, NULL, NULL },
   { "ratelim", test_ratelim, 0, NULL, NULL },
+  { "severity_is_interesting", test_severity_is_interesting,
+    TT_FORK, NULL, NULL },
   END_OF_TESTCASES
 };
