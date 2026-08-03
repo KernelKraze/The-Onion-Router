@@ -82,25 +82,6 @@ jobs:
             fi
           done
 
-      - name: Shutdown-race reproducer (41148)
-        run: |
-          ${{ matrix.cc }} -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS -O2 \
-            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
-            -I./src/ext/equix/hashx/include \
-            $(pkg-config --cflags libevent openssl 2>/dev/null) \
-            -c scripts/ci/repro_41148.c -o repro.o
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            LDD="-L$(brew --prefix libevent)/lib -L$(brew --prefix openssl@3)/lib -L$(brew --prefix xz)/lib -L$(brew --prefix zstd)/lib"
-          else
-            LDD=""
-          fi
-          ${{ matrix.cc }} -o repro repro.o src/test/libtor-testing.a \
-            $LDD -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
-          # perl alarm: macOS runners have no timeout(1)
-          perl -e 'alarm 120; exec @ARGV' ./repro
-          perl -e 'alarm 120; exec @ARGV' ./repro idle
-          perl -e 'alarm 120; exec @ARGV' ./repro update
-
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -255,16 +236,10 @@ jobs:
         env:
           TSAN_OPTIONS: halt_on_error=1
         run: |
-          clang -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS \
-            -fsanitize=thread -O1 -g \
-            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
-            -I./src/ext/equix/hashx/include \
-            -c scripts/ci/repro_41148.c -o repro.o
-          clang -fsanitize=thread -o repro repro.o src/test/libtor-testing.a \
-            -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
-          timeout 300 ./repro
-          timeout 300 ./repro idle
-          timeout 300 ./repro update
+          # The build already knows how to make this, with whatever CFLAGS
+          # configure was given -- here that is the thread sanitizer.
+          make src/test/test_workqueue_shutdown
+          TOR_TEST_WORKQUEUE_ROUNDS=50 sh src/test/test_workqueue_shutdown.sh
 
   asan-workqueue:
     name: ASan/UBSan workqueue (${{ matrix.arch }})
@@ -317,17 +292,8 @@ jobs:
         run: |
           ./src/test/test_workqueue
           ./src/test/test_workqueue -T 16
-          clang -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS \
-            -fsanitize=address,undefined -O1 -g \
-            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
-            -I./src/ext/equix/hashx/include \
-            -c scripts/ci/repro_41148.c -o repro.o
-          clang -fsanitize=address,undefined -o repro repro.o \
-            src/test/libtor-testing.a \
-            -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
-          timeout 300 ./repro
-          timeout 300 ./repro idle
-          timeout 300 ./repro update
+          make src/test/test_workqueue_shutdown
+          TOR_TEST_WORKQUEUE_ROUNDS=50 sh src/test/test_workqueue_shutdown.sh
 
   coverage:
     name: Coverage of our own changes
@@ -374,15 +340,8 @@ jobs:
           for v in cancel efd efd2 pipe pipe2 socketpair; do
             sh "src/test/test_workqueue_${v}.sh" || true
           done
-          gcc -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS --coverage -O0 -g \
-            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
-            -I./src/ext/equix/hashx/include \
-            -c scripts/ci/repro_41148.c -o repro.o
-          gcc --coverage -o repro repro.o src/test/libtor-testing.a \
-            -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
-          ./repro || true
-          ./repro idle || true
-          ./repro update || true
+          make src/test/test_workqueue_shutdown
+          sh src/test/test_workqueue_shutdown.sh || true
 
       - name: Report
         id: report
@@ -554,12 +513,7 @@ jobs:
 
       - name: Build the reproducer
         run: |
-          gcc -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS -O1 -g \
-            -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
-            -I./src/ext/equix/hashx/include \
-            -c scripts/ci/repro_41148.c -o repro.o
-          gcc -o repro repro.o src/test/libtor-testing.a \
-            -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
+          make src/test/test_workqueue_shutdown
 
       - name: Descriptors and leaks under memcheck
         run: |
@@ -617,9 +571,14 @@ jobs:
             fi
             tail -12 "vg-$name.log"
           }
-          REPRO_ITERS=20 run_one busy   ./repro
-          REPRO_ITERS=20 run_one idle   ./repro idle
-          REPRO_ITERS=20 run_one update ./repro update
+          # valgrind runs this a hundred times slower, so ask for fewer
+          # rounds and turn the binary's own deadline off; the memcheck run
+          # is bounded by the job timeout instead.
+          export TOR_TEST_WORKQUEUE_ROUNDS=20 TOR_TEST_WORKQUEUE_DEADLINE=0
+          B=./src/test/test_workqueue_shutdown
+          run_one busy   "$B"
+          run_one idle   "$B" idle
+          run_one update "$B" update
           run_one unittest ./src/test/test_workqueue
           exit $status
 
@@ -642,8 +601,10 @@ jobs:
           status=0
           for mode in "" idle update; do
             echo "== ${mode:-busy}"
-            REPRO_ITERS=20 valgrind --tool=helgrind \
-              ./repro $mode > "vg-helgrind-${mode:-busy}.log" 2>&1 || status=1
+            TOR_TEST_WORKQUEUE_ROUNDS=20 TOR_TEST_WORKQUEUE_DEADLINE=0 \
+              valgrind --tool=helgrind \
+              ./src/test/test_workqueue_shutdown $mode \
+              > "vg-helgrind-${mode:-busy}.log" 2>&1 || status=1
             grep -E 'ERROR SUMMARY' "vg-helgrind-${mode:-busy}.log" || true
             grep -E 'lock order|not locked|Thread #[0-9]+ (unlocked|was created)' \
               "vg-helgrind-${mode:-busy}.log" | head -20 || true
@@ -798,7 +759,8 @@ jobs:
             # weaker memory model than x86-64, and #41209 was reported from
             # an arm64 machine. Everything under QEMU is slow, so run the
             # parts that bear on those changes rather than the whole suite.
-            make -j4 src/test/test src/test/test_workqueue
+            make -j4 src/test/test src/test/test_workqueue \
+                 src/test/test_workqueue_shutdown
             ./src/test/test
             ./src/test/test_workqueue
             ./src/test/test_workqueue -T 16
@@ -812,15 +774,10 @@ jobs:
                 exit 1
               fi
             done
-            gcc -std=gnu11 -DHAVE_CONFIG_H -DTOR_UNIT_TESTS -O2 \
-              -I. -I./src -I./src/ext -I./src/ext/trunnel -I./src/trunnel \
-              -I./src/ext/equix/hashx/include \
-              -c scripts/ci/repro_41148.c -o repro.o
-            gcc -o repro repro.o src/test/libtor-testing.a \
-              -levent -lssl -lcrypto -lz -llzma -lzstd -lpthread -lm
-            ./repro
-            ./repro idle
-            ./repro update
+            # QEMU is slow enough that the binary's own deadline would fire
+            # on a run that was going to pass, so widen it.
+            TOR_TEST_WORKQUEUE_DEADLINE=600 \
+              sh src/test/test_workqueue_shutdown.sh
 
             make clean
             ./configure --enable-fragile-hardening --disable-asciidoc

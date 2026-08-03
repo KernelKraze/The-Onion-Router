@@ -1,11 +1,26 @@
-/* Repro for tor#41148 and shutdown lost-wakeup.
- * argv[1] == "idle":   let workers drain and go idle before freeing the
- *                      pool (pure #41148 static-residue path).
- * argv[1] == "update": queue a per-thread update while workers are busy,
- *                      then free immediately, so some update args are
- *                      still pending when threadpool_free_() runs (the
- *                      #41209 update_args cleanup path).
- * Default: free while workers are busy (lost-wakeup path). */
+/* Copyright (c) 2026, The Tor Project, Inc. */
+/* See LICENSE for licensing information */
+
+/**
+ * \file test_workqueue_shutdown.c
+ * \brief Tear a thread pool down from each state it can be in.
+ *
+ * test_workqueue keeps its pool running: WQ_RPL_SHUTDOWN only stops one
+ * worker from taking more work, and threadpool_free() is never called. That
+ * leaves the teardown paths untested, which is where both #41148 and #41209
+ * were.
+ *
+ * The state to tear down from comes from argv[1]:
+ *   idle     let the workers drain first, so nothing is running when the
+ *            pool goes away
+ *   update   queue a per-thread update and free at once, leaving arguments
+ *            unconsumed for threadpool_free_() to dispose of
+ *   (none)   free while the workers are still busy
+ *
+ * TOR_TEST_WORKQUEUE_ROUNDS sets how many times to repeat, and
+ * TOR_TEST_WORKQUEUE_DEADLINE the seconds to allow, 0 for no limit.
+ **/
+
 #include "orconfig.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,13 +54,17 @@ n_rounds(void)
 /* A lost wakeup during teardown does not crash, it waits: the pool sits there
  * with nobody left to signal it. Bound the run so that shows up as a failed
  * test rather than as a job that never ends. A round takes milliseconds when
- * the pool tears down properly, so this is generous. */
+ * the pool tears down properly, so the default is generous -- but not against
+ * valgrind, which costs a hundredfold, so such a caller names its own budget
+ * or 0 to go without one. */
 static void
 set_deadline(int rounds)
 {
 #ifndef _WIN32
-  unsigned seconds = (unsigned)(10 + rounds * 2);
-  alarm(seconds);
+  const char *s = getenv("TOR_TEST_WORKQUEUE_DEADLINE");
+  unsigned seconds = s ? (unsigned)atoi(s) : (unsigned)(10 + rounds * 2);
+  if (seconds)
+    alarm(seconds);
 #else
   (void)rounds;
 #endif
