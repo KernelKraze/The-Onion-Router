@@ -733,7 +733,7 @@ jobs:
             apt-get update -q
             apt-get install -y -q build-essential automake autoconf \
               libtool pkg-config libevent-dev libssl-dev zlib1g-dev \
-              liblzma-dev libzstd-dev git
+              liblzma-dev libzstd-dev libsystemd-dev git
             # micro-revision.i is only written when both a .git and a git
             # binary are present, and this image ships neither by default,
             # so the binary went out reporting an empty revision. The
@@ -742,7 +742,12 @@ jobs:
             # repository unless told the path is trusted.
             git config --global --add safe.directory /work
             ./autogen.sh
-            ./configure --disable-asciidoc
+            # --enable-systemd rather than the default autodetection: the
+            # Raspberry Pi binary replaces a distribution tor, whose unit
+            # file is Type=notify, and a tor built without sd_notify never
+            # reports readiness. Autodetection would drop the feature and
+            # still exit 0 if libsystemd-dev failed to install; this errors.
+            ./configure --disable-asciidoc --enable-systemd
             make -j4 src/app/tor
             rev=\$(cat micro-revision.i)
             echo \"micro-revision.i: \$rev\"
@@ -868,6 +873,8 @@ jobs:
             Naming: `<platform>-<cc>-[production|debug]`
 
             Production binaries are stripped and need nothing beyond the usual libevent/openssl/zlib for the platform. The Windows one is statically linked and needs no mingw DLLs.
+
+            tor-production-raspberry-pi-aarch64 is built --enable-systemd and also links libsystemd.so.0, which is already present on a machine running systemd. It reports readiness with sd_notify, so it can replace a distribution tor under that distribution's `Type=notify` unit file. The other production binaries are built without systemd support and will be killed at `TimeoutStartSec` under such a unit.
 
             Debug binaries are built with --enable-fragile-hardening, which links AddressSanitizer. gcc links that runtime as a shared library while clang on Linux links it into the binary, so only some of these need anything installed. Where one is listed, the binary will not start without it:
 
