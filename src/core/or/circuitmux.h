@@ -210,6 +210,13 @@ struct circuitmux_t {
 
   /* Policy-specific data */
   circuitmux_policy_data_t *policy_data;
+
+  /** Global identifier of the channel this mux serves, or 0 if no circuit
+   * has been attached yet.  Every key in chanid_circid_map uses this same
+   * channel ID, so a lookup can pick the side of a circuit that faces us
+   * instead of trying both.
+   */
+  uint64_t chan_id;
 };
 
 #endif /* defined(CIRCUITMUX_PRIVATE) */

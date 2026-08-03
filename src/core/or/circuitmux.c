@@ -572,50 +572,46 @@ static chanid_circid_muxinfo_t *
 circuitmux_find_map_entry(circuitmux_t *cmux, circuit_t *circ)
 {
   chanid_circid_muxinfo_t search, *hashent = NULL;
+  cell_direction_t direction;
 
   /* Sanity-check parameters */
   tor_assert(cmux);
   tor_assert(cmux->chanid_circid_map);
   tor_assert(circ);
 
-  /* Check if we have n_chan */
-  if (circ->n_chan) {
-    /* Okay, let's see if it's attached for n_chan/n_circ_id */
-    search.chan_id = circ->n_chan->global_identifier;
+  /* Nothing has ever been attached here, so the map is empty */
+  if (cmux->chan_id == 0) {
+    tor_assert(HT_EMPTY(cmux->chanid_circid_map));
+    return NULL;
+  }
+
+  /* Every key we store carries our channel ID, so only the side of the
+   * circuit that faces our channel can be in the map; find that side.
+   */
+  if (circ->n_chan && circ->n_chan->global_identifier == cmux->chan_id) {
     search.circ_id = circ->n_circ_id;
-
-    /* Query */
-    hashent = HT_FIND(chanid_circid_muxinfo_map, cmux->chanid_circid_map,
-                      &search);
-  }
-
-  /* Found something? */
-  if (hashent) {
-    /*
-     * Assert that the direction makes sense for a hashent we found by
-     * n_chan/n_circ_id before we return it.
-     */
-    tor_assert(hashent->muxinfo.direction == CELL_DIRECTION_OUT);
+    direction = CELL_DIRECTION_OUT;
+  } else if (circ->magic == OR_CIRCUIT_MAGIC &&
+             TO_OR_CIRCUIT(circ)->p_chan &&
+             TO_OR_CIRCUIT(circ)->p_chan->global_identifier ==
+               cmux->chan_id) {
+    search.circ_id = TO_OR_CIRCUIT(circ)->p_circ_id;
+    direction = CELL_DIRECTION_IN;
   } else {
-    /* Not there, have we got a p_chan/p_circ_id to try? */
-    if (circ->magic == OR_CIRCUIT_MAGIC) {
-      search.circ_id = TO_OR_CIRCUIT(circ)->p_circ_id;
-      /* Check for p_chan */
-      if (TO_OR_CIRCUIT(circ)->p_chan) {
-        search.chan_id = TO_OR_CIRCUIT(circ)->p_chan->global_identifier;
-        /* Okay, search for that */
-        hashent = HT_FIND(chanid_circid_muxinfo_map, cmux->chanid_circid_map,
-                          &search);
-        /* Find anything? */
-        if (hashent) {
-          /* Assert that the direction makes sense before we return it */
-          tor_assert(hashent->muxinfo.direction == CELL_DIRECTION_IN);
-        }
-      }
-    }
+    /* Neither side is on our channel, so it isn't attached here */
+    return NULL;
+  }
+  search.chan_id = cmux->chan_id;
+
+  /* Query */
+  hashent = HT_FIND(chanid_circid_muxinfo_map, cmux->chanid_circid_map,
+                    &search);
+
+  if (hashent) {
+    /* Assert that the direction makes sense before we return it */
+    tor_assert(hashent->muxinfo.direction == direction);
   }
 
-  /* Okay, hashent is it if it was there */
   return hashent;
 }
 
@@ -764,6 +760,11 @@ circuitmux_attach_circuit,(circuitmux_t *cmux, circuit_t *circ,
 
   /* Get the channel ID */
   channel_id = chan->global_identifier;
+
+  /* Remember whose mux this is; every key we add uses this channel ID. */
+  if (cmux->chan_id == 0)
+    cmux->chan_id = channel_id;
+  tor_assert(cmux->chan_id == channel_id);
 
   /* See if we already have this one */
   search.chan_id = channel_id;

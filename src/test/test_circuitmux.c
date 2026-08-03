@@ -444,6 +444,66 @@ cmux_setup_test(const struct testcase_t *tc)
   return &whatever;
 }
 
+/** Test that a mux only finds the circuits it carries. */
+static void
+test_cmux_foreign_circuit(void *arg)
+{
+  circuit_t *circ = NULL, *other_circ = NULL;
+  or_circuit_t *orcirc = NULL, *other_orcirc = NULL;
+  channel_t *pchan = NULL, *nchan = NULL;
+  channel_t *other_pchan = NULL, *other_nchan = NULL;
+  circuitmux_t *empty_cmux = NULL;
+
+  (void) arg;
+
+  pchan = new_fake_channel();
+  tt_assert(pchan);
+  nchan = new_fake_channel();
+  tt_assert(nchan);
+  orcirc = new_fake_orcirc(nchan, pchan);
+  tt_assert(orcirc);
+  circ = TO_CIRCUIT(orcirc);
+
+  /* A mux that has never had a circuit attached carries nothing. */
+  empty_cmux = circuitmux_alloc();
+  tt_assert(empty_cmux);
+  tt_int_op(circuitmux_is_circuit_attached(empty_cmux, circ), OP_EQ, 0);
+  tt_uint_op(circuitmux_num_cells_for_circuit(empty_cmux, circ), OP_EQ, 0);
+
+  /* Neither does a mux serving other channels: the circuit faces pchan and
+   * nchan, so neither of its ends can be in their maps. */
+  other_pchan = new_fake_channel();
+  tt_assert(other_pchan);
+  other_nchan = new_fake_channel();
+  tt_assert(other_nchan);
+  other_orcirc = new_fake_orcirc(other_nchan, other_pchan);
+  tt_assert(other_orcirc);
+  other_circ = TO_CIRCUIT(other_orcirc);
+
+  tt_int_op(circuitmux_is_circuit_attached(other_pchan->cmux, circ), OP_EQ, 0);
+  tt_int_op(circuitmux_is_circuit_attached(other_nchan->cmux, circ), OP_EQ, 0);
+  tt_int_op(circuitmux_is_circuit_attached(pchan->cmux, other_circ), OP_EQ, 0);
+  tt_int_op(circuitmux_is_circuit_attached(nchan->cmux, other_circ), OP_EQ, 0);
+
+  /* Each circuit is still found by the two muxes that do carry it, in the
+   * direction each of them attached it. */
+  tt_int_op(circuitmux_is_circuit_attached(pchan->cmux, circ), OP_EQ, 1);
+  tt_int_op(circuitmux_attached_circuit_direction(pchan->cmux, circ), OP_EQ,
+            CELL_DIRECTION_IN);
+  tt_int_op(circuitmux_is_circuit_attached(nchan->cmux, circ), OP_EQ, 1);
+  tt_int_op(circuitmux_attached_circuit_direction(nchan->cmux, circ), OP_EQ,
+            CELL_DIRECTION_OUT);
+
+ done:
+  circuitmux_free(empty_cmux);
+  free_fake_orcirc(orcirc);
+  free_fake_orcirc(other_orcirc);
+  free_fake_channel(pchan);
+  free_fake_channel(nchan);
+  free_fake_channel(other_pchan);
+  free_fake_channel(other_nchan);
+}
+
 static int
 cmux_cleanup_test(const struct testcase_t *tc, void *ptr)
 {
@@ -469,6 +529,7 @@ struct testcase_t circuitmux_tests[] = {
   TEST_CMUX(attach_circuit),
   TEST_CMUX(detach_circuit),
   TEST_CMUX(detach_all_circuits),
+  TEST_CMUX(foreign_circuit),
   TEST_CMUX(policy),
   TEST_CMUX(xmit_cell),
 

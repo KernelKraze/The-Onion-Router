@@ -1,0 +1,5 @@
+  o Minor features (performance, relay):
+    - Look up a circuit in a circuitmux by the end that faces the mux's own
+      channel. Trying one end and falling back to the other spent a siphash
+      and a bucket probe on a key that could not match; on a busy bridge
+      that was 96% of the lookups.
