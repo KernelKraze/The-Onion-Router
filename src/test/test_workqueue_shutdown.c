@@ -8,12 +8,48 @@
  * Default: free while workers are busy (lost-wakeup path). */
 #include "orconfig.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 #include "lib/evloop/workqueue.h"
 #include "lib/crypt_ops/crypto_init.h"
 #include "lib/log/log.h"
 #include "lib/malloc/malloc.h"
 #include "lib/time/compat_time.h"
+
+/* Rounds to run. A race that shows up now and then needs repetition, but the
+ * idle case sleeps in each round, so the default keeps "make check" quick and
+ * CI raises it with TOR_TEST_WORKQUEUE_ROUNDS. */
+#define N_ROUNDS_DEFAULT 10
+
+static int
+n_rounds(void)
+{
+  const char *s = getenv("TOR_TEST_WORKQUEUE_ROUNDS");
+  if (s) {
+    int v = atoi(s);
+    if (v > 0)
+      return v;
+  }
+  return N_ROUNDS_DEFAULT;
+}
+
+/* A lost wakeup during teardown does not crash, it waits: the pool sits there
+ * with nobody left to signal it. Bound the run so that shows up as a failed
+ * test rather than as a job that never ends. A round takes milliseconds when
+ * the pool tears down properly, so this is generous. */
+static void
+set_deadline(int rounds)
+{
+#ifndef _WIN32
+  unsigned seconds = (unsigned)(10 + rounds * 2);
+  alarm(seconds);
+#else
+  (void)rounds;
+#endif
+}
 
 static void *
 new_state(void *arg)
@@ -69,7 +105,9 @@ main(int argc, char **argv)
   init_logging(1);
   if (crypto_global_init(0, NULL, NULL) < 0)
     return 2;
-  for (int iter = 1; iter <= 50; iter++) {
+  const int rounds = n_rounds();
+  set_deadline(rounds);
+  for (int iter = 1; iter <= rounds; iter++) {
     replyqueue_t *rq = replyqueue_new(0);
     if (!rq) { printf("iter %d: replyqueue_new failed\n", iter); return 2; }
     threadpool_t *tp = threadpool_new(8, rq, new_state, free_state, NULL);

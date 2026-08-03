@@ -181,6 +181,7 @@ scripts/maint/geoip/geoip6
 /src/test/test-switch-id
 /src/test/test-timers
 /src/test/test_workqueue
+/src/test/test_workqueue_shutdown
 /src/test/test.exe
 /src/test/test-slow.exe
 /src/test/test-bt-cl.exe

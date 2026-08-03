@@ -20,6 +20,7 @@ TESTSCRIPTS = \
 	src/test/test_workqueue_pipe.sh \
 	src/test/test_workqueue_pipe2.sh \
 	src/test/test_workqueue_socketpair.sh \
+	src/test/test_workqueue_shutdown.sh \
 	src/test/test_switch_id.sh \
 	src/test/test_cmdline.sh \
 	src/test/test_parseconf.sh \
@@ -97,6 +98,7 @@ noinst_PROGRAMS+= \
 	src/test/test-memwipe \
 	src/test/test-process \
 	src/test/test_workqueue \
+	src/test/test_workqueue_shutdown \
 	src/test/test-switch-id \
 	src/test/test-timers \
 	src/test/test-rng
@@ -297,6 +299,11 @@ src_test_test_workqueue_SOURCES = \
 src_test_test_workqueue_CPPFLAGS= $(src_test_AM_CPPFLAGS)
 src_test_test_workqueue_CFLAGS = $(AM_CFLAGS) $(TEST_CFLAGS)
 
+src_test_test_workqueue_shutdown_SOURCES = \
+	src/test/test_workqueue_shutdown.c
+src_test_test_workqueue_shutdown_CPPFLAGS= $(src_test_AM_CPPFLAGS)
+src_test_test_workqueue_shutdown_CFLAGS = $(AM_CFLAGS) $(TEST_CFLAGS)
+
 src_test_test_switch_id_SOURCES = \
 	src/test/test_switch_id.c
 src_test_test_switch_id_CPPFLAGS= $(src_test_AM_CPPFLAGS)
@@ -352,6 +359,9 @@ src_test_test_workqueue_LDADD = \
 	$(TOR_LIBS_CRYPTLIB) @TOR_LIB_WS32@ @TOR_LIB_IPHLPAPI@ @TOR_LIB_SHLWAPI@ @TOR_LIB_GDI@ @TOR_LIB_USERENV@ \
 	@CURVE25519_LIBS@ \
 	@TOR_LZMA_LIBS@ @TOR_ZSTD_LIBS@ @TOR_TRACE_LIBS@
+
+src_test_test_workqueue_shutdown_LDFLAGS = $(src_test_test_workqueue_LDFLAGS)
+src_test_test_workqueue_shutdown_LDADD = $(src_test_test_workqueue_LDADD)
 
 src_test_test_timers_CPPFLAGS = $(src_test_test_CPPFLAGS)
 src_test_test_timers_CFLAGS = $(src_test_test_CFLAGS)
@@ -452,6 +462,7 @@ EXTRA_DIST += \
 	src/test/test_workqueue_pipe.sh \
 	src/test/test_workqueue_pipe2.sh \
 	src/test/test_workqueue_socketpair.sh \
+	src/test/test_workqueue_shutdown.sh \
 	src/test/test_cmdline.sh \
 	src/test/test_parseconf.sh \
 	src/test/unittest_part1.sh \
