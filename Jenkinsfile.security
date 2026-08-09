@@ -262,10 +262,15 @@ pipeline {
           // and beside the entry in the build list. readFile rather than
           // readProperties: the latter comes from Pipeline Utility Steps, and
           // this needs three strings, not a plugin.
+          // A for loop over readLines() rather than eachLine with a closure.
+          // eachLine is a GDK method, so Java code drives the closure, and the
+          // pipeline's CPS transformation cuts the body off at its first
+          // transformed call: the first line lands in the map and the rest do
+          // not.
           def info = [:]
-          readFile('.buildinfo.properties').eachLine { line ->
-            def kv = line.split('=', 2)
-            if (kv.length == 2) { info[kv[0]] = kv[1] }
+          for (String line : readFile('.buildinfo.properties').readLines()) {
+            int eq = line.indexOf('=')
+            if (eq > 0) { info[line.substring(0, eq)] = line.substring(eq + 1) }
           }
           currentBuild.description =
             "tor ${info.TOR_VERSION} @ ${info.TOR_COMMIT}\n" +
@@ -378,9 +383,16 @@ EOF
           set -e
           make -s distclean || true
           ./autogen.sh
+          # "undefined" only. clang's "integer" group adds
+          # unsigned-integer-overflow, and unsigned wraparound is defined
+          # behaviour that siphash and the curve25519 code use deliberately.
+          # With -fno-sanitize-recover the first such wrap aborts, so that
+          # group would fail this stage inside working crypto rather than on a
+          # defect. configure also adds -fwrapv, which makes signed overflow
+          # wrap rather than be undefined.
           CC=clang \
-          CFLAGS="-fsanitize=undefined,integer -fno-sanitize-recover=all -O1 -g" \
-          LDFLAGS="-fsanitize=undefined,integer" \
+          CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -O1 -g" \
+          LDFLAGS="-fsanitize=undefined" \
           ./configure --disable-asciidoc
           make -j"${JOBS}"
           make check
@@ -509,7 +521,17 @@ EOF
     cleanup {
       // The sanitizer and libfuzzer trees are each a full build. Leaving them
       // behind fills the disk in a handful of runs.
-      sh 'make -s distclean || true'
+      //
+      // A bare sh here fails with "Required context class hudson.FilePath is
+      // missing" when the pipeline ends without ever having had a workspace,
+      // which a pipeline-level post block can do: it runs even when the
+      // failure came before the agent was allocated. getContext returns null
+      // in exactly that case, so ask before running a step that needs one.
+      script {
+        if (getContext(hudson.FilePath)) {
+          sh 'make -s distclean || true'
+        }
+      }
     }
   }
 }
