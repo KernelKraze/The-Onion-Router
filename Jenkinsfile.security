@@ -21,6 +21,8 @@ pipeline {
   }
 
   parameters {
+    string(name: 'STATE_DIR', defaultValue: '/var/lib/jenkins/tor-ci-state',
+           description: 'Absolute path for state that outlives the workspace: the fuzzing corpora checkout and the accumulated fuzz corpus. Must be writable by the user Jenkins runs as.')
     string(name: 'JOBS', defaultValue: '2',
            description: 'make -j value. Each cc1 on the larger tor files takes a few hundred MB.')
     string(name: 'FUZZ_MINUTES', defaultValue: '20',
@@ -37,12 +39,18 @@ pipeline {
   }
 
   environment {
-    // fuzzing-corpora is a separate repository; make test-fuzz-corpora is a
-    // no-op without it. Keep the checkout outside the workspace so it
-    // survives between builds.
-    TOR_FUZZ_CORPORA = "${env.JENKINS_HOME}/tor-fuzzing-corpora"
-    // Guided fuzzing only pays off if the corpus accumulates across runs.
-    FUZZ_CORPUS_DIR = "${env.JENKINS_HOME}/tor-fuzz-corpus"
+    // Both of these outlive the workspace on purpose: fuzzing-corpora is a
+    // separate repository, and guided fuzzing only pays off if the corpus
+    // accumulates across runs.
+    //
+    // STATE_DIR is a parameter rather than ${env.JENKINS_HOME}/something.
+    // JENKINS_HOME names a path on the controller, so on a remote agent it
+    // either does not exist or interpolates to the string "null", and either
+    // way the corpus is written somewhere else and every build starts from an
+    // empty one. That failure is silent: fuzzing still runs, it just never
+    // gets past the shallow inputs.
+    TOR_FUZZ_CORPORA = "${params.STATE_DIR}/fuzzing-corpora"
+    FUZZ_CORPUS_DIR = "${params.STATE_DIR}/fuzz-corpus"
   }
 
   stages {
@@ -276,6 +284,17 @@ pipeline {
       steps {
         sh '''
           set -e
+          # First use of STATE_DIR. Check it here rather than let mkdir -p
+          # create a relative path inside the workspace, which distclean would
+          # then remove between builds while the fuzzing stage went on
+          # reporting that it had a corpus.
+          case "${STATE_DIR}" in
+            /*) ;;
+            *) echo "STATE_DIR must be absolute, got '${STATE_DIR}'"; exit 1 ;;
+          esac
+          mkdir -p "${STATE_DIR}"
+          [ -w "${STATE_DIR}" ] || { echo "${STATE_DIR} is not writable"; exit 1; }
+
           if [ ! -d "$TOR_FUZZ_CORPORA" ]; then
             git clone --depth 1 \
               https://gitlab.torproject.org/tpo/core/fuzzing-corpora.git \
