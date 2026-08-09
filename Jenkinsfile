@@ -134,10 +134,17 @@ pipeline {
           // write without script approval. readFile rather than
           // readProperties: the latter needs the Pipeline Utility Steps
           // plugin, and this needs three strings.
+          //
+          // A for loop over readLines() rather than eachLine with a closure.
+          // eachLine is a GDK method, so Java code drives the closure, and
+          // the pipeline's CPS transformation cuts the body off at its first
+          // transformed call. The first line lands in the map and the rest do
+          // not, which showed up as "@ null" and "build-id null" in the
+          // description of build 6 while BUILDINFO.txt held the right values.
           def info = [:]
-          readFile('.buildinfo.properties').eachLine { line ->
-            def kv = line.split('=', 2)
-            if (kv.length == 2) { info[kv[0]] = kv[1] }
+          for (String line : readFile('.buildinfo.properties').readLines()) {
+            int eq = line.indexOf('=')
+            if (eq > 0) { info[line.substring(0, eq)] = line.substring(eq + 1) }
           }
           currentBuild.description =
             "tor ${info.TOR_VERSION} @ ${info.TOR_COMMIT}\n" +
@@ -150,6 +157,24 @@ pipeline {
           // is what lets someone holding a downloaded binary find its log.
           archiveArtifacts artifacts: 'artifacts/tor-linux-amd64-*, artifacts/BUILDINFO-*.txt',
                            fingerprint: true
+        }
+      }
+    }
+  }
+
+  post {
+    cleanup {
+      // The build tree is around 300 MB and nothing else removes it, so it
+      // would sit in the workspace between builds.
+      //
+      // A bare sh here fails with "Required context class hudson.FilePath is
+      // missing" when the pipeline ends without ever having had a workspace,
+      // which a pipeline-level post block can do: it runs even when the
+      // failure came before the agent was allocated. getContext returns null
+      // in exactly that case, so ask before running a step that needs one.
+      script {
+        if (getContext(hudson.FilePath)) {
+          sh 'make -s distclean || true'
         }
       }
     }
