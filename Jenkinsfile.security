@@ -204,13 +204,64 @@ pipeline {
 
           "$bin" --version
           ls -l "$bin" "$bin.debug"
+
+          # A manifest beside the binaries, so the download page carries the
+          # facts someone needs before running an unsigned build: which commit,
+          # which build-id to pair the debuginfo by, and what was checked.
+          # Everything here is read out of the tree or off the binary; nothing
+          # is written down twice, so nothing can go stale.
+          ver=$(sed -n 's/^AC_INIT(\\[tor\\],\\[\\(.*\\)\\])$/\\1/p' configure.ac)
+          {
+            echo "tor $ver"
+            echo "commit         $(echo "$rev" | tr -d '\\"')"
+            echo "build          #${BUILD_NUMBER}"
+            echo "built          $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "platform       linux-amd64"
+            echo "gnu build-id   $id_bin"
+            echo
+            echo "files"
+            for f in "$bin" "$bin.debug"; do
+              printf '  %-46s %s\\n' "$(basename "$f")" \
+                "$(du -h "$f" | cut -f1)"
+            done
+            echo
+            echo "checks that ran on this binary"
+            echo "  hardening      RELRO, BIND_NOW, stack canary, NX, PIE"
+            echo "  semantic       scripts/coccinelle, practracker"
+            echo "  sanitizers     ${RUN_SANITIZERS}"
+            echo "  fuzzing        ${FUZZ_MINUTES} minutes per harness"
+            echo "  chutney        ${RUN_CHUTNEY}"
+          } > artifacts/BUILDINFO-${BUILD_NUMBER}.txt
+          cat artifacts/BUILDINFO-${BUILD_NUMBER}.txt
+
+          # Handed to the Groovy side, which cannot read the shell's variables.
+          {
+            echo "TOR_VERSION=$ver"
+            echo "TOR_BUILD_ID=$id_bin"
+            echo "TOR_COMMIT=$(echo "$rev" | tr -d '\\"')"
+          } > .buildinfo.properties
         '''
+        script {
+          // The build description is the one part of this page a pipeline can
+          // write without script approval, and it shows both on the build page
+          // and beside the entry in the build list. readFile rather than
+          // readProperties: the latter comes from Pipeline Utility Steps, and
+          // this needs three strings, not a plugin.
+          def info = [:]
+          readFile('.buildinfo.properties').eachLine { line ->
+            def kv = line.split('=', 2)
+            if (kv.length == 2) { info[kv[0]] = kv[1] }
+          }
+          currentBuild.description =
+            "tor ${info.TOR_VERSION} @ ${info.TOR_COMMIT}\n" +
+            "linux-amd64, build-id ${info.TOR_BUILD_ID}"
+        }
       }
       post {
         success {
           // fingerprint ties each file back to the build that made it, which
           // is what lets someone with a downloaded binary find its log.
-          archiveArtifacts artifacts: 'artifacts/tor-production-linux-amd64-*',
+          archiveArtifacts artifacts: 'artifacts/tor-production-linux-amd64-*, artifacts/BUILDINFO-*.txt',
                            fingerprint: true
         }
       }
