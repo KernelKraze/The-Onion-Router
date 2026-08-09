@@ -95,6 +95,13 @@ pipeline {
       steps {
         sh '''
           set -e
+          # artifacts/ is not a Makefile directory, so the distclean in the
+          # cleanup block leaves it and it survives into the next build. The
+          # archive globs end in "*", so build 5 would publish the binaries
+          # from builds 1 through 5 and Last Successful Artifacts would list
+          # every version ever built instead of this one. Jenkins keeps its
+          # own copies under the build record; the workspace needs none.
+          rm -rf artifacts
           ./autogen.sh
           ./configure --enable-fatal-warnings --disable-asciidoc
           make -j"${JOBS}"
