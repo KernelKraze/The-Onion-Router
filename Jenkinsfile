@@ -154,10 +154,4 @@ pipeline {
       }
     }
   }
-
-  post {
-    cleanup {
-      sh 'make -s distclean || true'
-    }
-  }
 }
