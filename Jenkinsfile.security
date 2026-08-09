@@ -1,0 +1,515 @@
+// Security pipeline for a self-hosted Jenkins.
+//
+// This does not repeat what .github/workflows/ci.yml already does. That
+// workflow runs "make check", which Makefile.am's check-local extends with
+// check-spaces, check-changes, check-includes and shellcheck. Everything
+// below is a check that no GitHub job performs.
+//
+// Every stage runs serially and the build uses -j2. The machine this was
+// written for has about 1.5 GB free, and two of these stages (the sanitizer
+// builds) are the largest consumers. Raise JOBS and FUZZ_RSS_MB on a bigger
+// host.
+
+pipeline {
+  agent any
+
+  options {
+    // Two of these builds at once will exhaust memory on a small host.
+    disableConcurrentBuilds()
+    timestamps()
+    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
+  }
+
+  parameters {
+    string(name: 'STATE_DIR', defaultValue: '/var/lib/jenkins/tor-ci-state',
+           description: 'Absolute path for state that outlives the workspace: the fuzzing corpora checkout and the accumulated fuzz corpus. Must be writable by the user Jenkins runs as.')
+    string(name: 'JOBS', defaultValue: '2',
+           description: 'make -j value. Each cc1 on the larger tor files takes a few hundred MB.')
+    string(name: 'FUZZ_MINUTES', defaultValue: '20',
+           description: 'Wall time per fuzz harness. 0 skips guided fuzzing.')
+    string(name: 'FUZZ_RSS_MB', defaultValue: '512',
+           description: 'libFuzzer -rss_limit_mb. The harness aborts above this.')
+    booleanParam(name: 'RUN_CHUTNEY', defaultValue: false,
+                 description: 'Opt in to the chutney network. Off by default, and it can never fail the build: see the Chutney stage.')
+    choice(name: 'CHUTNEY_TARGET',
+           choices: ['test-network', 'test-network-ipv4', 'test-network-all'],
+           description: 'test-network is the quick pair, bridges+hs-v3 and single-onion-v3-ipv6-md. test-network-all runs every flavor and takes far longer.')
+    booleanParam(name: 'RUN_SANITIZERS', defaultValue: true,
+                 description: 'UBSan and ASan builds. Each is a full rebuild.')
+  }
+
+  environment {
+    // Both of these outlive the workspace on purpose: fuzzing-corpora is a
+    // separate repository, and guided fuzzing only pays off if the corpus
+    // accumulates across runs.
+    //
+    // STATE_DIR is a parameter rather than ${env.JENKINS_HOME}/something.
+    // JENKINS_HOME names a path on the controller, so on a remote agent it
+    // either does not exist or interpolates to the string "null", and either
+    // way the corpus is written somewhere else and every build starts from an
+    // empty one. That failure is silent: fuzzing still runs, it just never
+    // gets past the shallow inputs.
+    TOR_FUZZ_CORPORA = "${params.STATE_DIR}/fuzzing-corpora"
+    FUZZ_CORPUS_DIR = "${params.STATE_DIR}/fuzz-corpus"
+  }
+
+  stages {
+
+    stage('Secrets') {
+      // First, and outside any build: a leaked bridge line cannot be
+      // un-published. This repository is mirrored to a public GitHub, and
+      // scripts/ops and the obfs4 credentials are deliberately kept out of it.
+      steps {
+        sh '''
+          set -e
+          # Bridge lines and their certs. An obfs4 cert is 70 base64 characters
+          # and the line names the transport, so match on the pair rather than
+          # on base64 alone, which appears all over a Tor tree.
+          if git grep -nE 'obfs4[[:space:]]+[0-9.]+:[0-9]+[[:space:]]+[0-9A-F]{40}' -- . ; then
+            echo "obfs4 bridge line committed"; exit 1
+          fi
+          if git grep -nE '\\bcert=[A-Za-z0-9+/]{60,}' -- . ; then
+            echo "pluggable-transport cert committed"; exit 1
+          fi
+          # Private keys, outside the two directories that hold them on
+          # purpose: test_crypto.c, test_data.c, test_parsecommon.c and
+          # testing_rsakeys.c all carry fixed RSA keys as test vectors, and
+          # src/ext is upstream code. Matching those on every build would
+          # train whoever reads this job to ignore it.
+          if git grep -nE 'BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY' \
+               -- . ':!src/test/' ':!src/ext/' ; then
+            echo "private key committed"; exit 1
+          fi
+          # The ops scripts are for the operator's own hosts and name real
+          # addresses; they belong in a private branch, not in a tree that
+          # gets mirrored.
+          if git ls-files --error-unmatch scripts/ops >/dev/null 2>&1; then
+            echo "scripts/ops is tracked in this branch"; exit 1
+          fi
+          echo "no secrets found"
+        '''
+      }
+    }
+
+    stage('Configure and build') {
+      steps {
+        sh '''
+          set -e
+          # artifacts/ is not a Makefile directory, so the distclean in the
+          # cleanup block leaves it and it survives into the next build. The
+          # archive globs end in "*", so build 5 would publish the binaries
+          # from builds 1 through 5 and Last Successful Artifacts would list
+          # every version ever built instead of this one. Jenkins keeps its
+          # own copies under the build record; the workspace needs none.
+          rm -rf artifacts
+          ./autogen.sh
+          ./configure --enable-fatal-warnings --disable-asciidoc
+          make -j"${JOBS}"
+        '''
+      }
+    }
+
+    stage('Semantic patches') {
+      // scripts/coccinelle carries twelve .cocci patches for patterns that
+      // compile but are wrong in this codebase: raw calloc, malloc casts,
+      // tt_assert on a pointer where tt_ptr_op belongs. No GitHub job runs
+      // them, so a violation reaches main unremarked.
+      steps {
+        sh '''
+          set -e
+          if ! command -v spatch >/dev/null; then
+            echo "coccinelle not installed; skipping"; exit 0
+          fi
+          make check-cocci
+        '''
+      }
+    }
+
+    stage('Practracker') {
+      // practracker refuses new over-long functions and files. It is a
+      // maintainability check that carries security weight: the functions
+      // that grow past its limits are where review stops being effective.
+      steps {
+        sh 'make check-best-practices'
+      }
+    }
+
+    stage('Binary hardening') {
+      // The release workflow publishes production binaries without ever
+      // asserting they are hardened. A configure or toolchain change that
+      // silently drops RELRO or the stack canary would go out unnoticed.
+      steps {
+        sh '''
+          set -e
+          bin=src/app/tor
+          fail=0
+
+          # Full RELRO: GNU_RELRO segment plus BIND_NOW.
+          readelf -lW "$bin" | grep -q GNU_RELRO || { echo "no RELRO"; fail=1; }
+          readelf -dW "$bin" | grep -qE 'BIND_NOW|FLAGS_1.*NOW' || { echo "no BIND_NOW"; fail=1; }
+
+          # Stack canaries.
+          readelf -sW "$bin" | grep -q __stack_chk_fail || { echo "no stack canary"; fail=1; }
+
+          # Non-executable stack.
+          readelf -lW "$bin" | grep GNU_STACK | grep -q RWE && { echo "executable stack"; fail=1; }
+
+          # Position independent: ET_DYN plus a PIE marker, not a prelinked .so.
+          readelf -hW "$bin" | grep -q 'Type:[[:space:]]*DYN' || { echo "not PIE"; fail=1; }
+
+          # _FORTIFY_SOURCE replaces the plain libc calls with _chk variants.
+          readelf -sW "$bin" | grep -q '_chk@' || echo "warning: no _FORTIFY_SOURCE _chk symbols"
+
+          [ "$fail" = 0 ] || { echo "hardening check failed"; exit 1; }
+          echo "hardening OK"
+        '''
+      }
+    }
+
+    stage('Publish Linux amd64') {
+      // Jenkins keeps a lastSuccessfulBuild/artifact/ permalink, so archiving
+      // here gives a stable download for the most recent build that passed
+      // every stage above it -- including the hardening check, which runs on
+      // this same tree and this same binary.
+      //
+      // Only this one platform. The GitHub workflow already publishes the
+      // other seven, and it is the platform the security stages here actually
+      // ran on; publishing a binary from a build whose checks were skipped
+      // would misrepresent what "last successful" means.
+      when {
+        expression {
+          sh(script: 'test "$(uname -s)" = Linux && test "$(uname -m)" = x86_64',
+             returnStatus: true) == 0
+        }
+      }
+      steps {
+        sh '''
+          set -e
+          mkdir -p artifacts
+          rev=$(cat micro-revision.i)
+          echo "micro-revision.i: $rev"
+          # A binary that cannot name its commit is not much use for reporting
+          # a bug against, and the string is invisible unless someone reads it.
+          if [ "$rev" = '""' ]; then
+            echo "no git revision embedded"; exit 1
+          fi
+
+          bin="artifacts/tor-production-linux-amd64-${BUILD_NUMBER}"
+          cp src/app/tor "$bin"
+
+          # Split rather than discard, and in this order: the stripped binary
+          # keeps its GNU build-id, which is the value gdb and perf pair it
+          # with its symbols by. Same recipe as the GitHub workflow, so an
+          # artifact from either side symbolicates the same way.
+          objcopy --only-keep-debug "$bin" "$bin.debug"
+          strip "$bin"
+          objcopy --add-gnu-debuglink="$bin.debug" "$bin"
+
+          id_bin=$(readelf -n "$bin" | awk '/Build ID/{print $3}')
+          id_dbg=$(readelf -n "$bin.debug" | awk '/Build ID/{print $3}')
+          echo "binary    $id_bin"
+          echo "debuginfo $id_dbg"
+          if [ -z "$id_bin" ] || [ "$id_bin" != "$id_dbg" ]; then
+            echo "build ids do not match, the debuginfo is unusable"; exit 1
+          fi
+          readelf -S "$bin.debug" | grep -q '\\.debug_info' || {
+            echo "$bin.debug carries no DWARF"; exit 1; }
+          file "$bin" | grep -q 'not stripped' && {
+            echo "$bin was not stripped"; exit 1; }
+
+          "$bin" --version
+          ls -l "$bin" "$bin.debug"
+
+          # A manifest beside the binaries, so the download page carries the
+          # facts someone needs before running an unsigned build: which commit,
+          # which build-id to pair the debuginfo by, and what was checked.
+          # Everything here is read out of the tree or off the binary; nothing
+          # is written down twice, so nothing can go stale.
+          ver=$(sed -n 's/^AC_INIT(\\[tor\\],\\[\\(.*\\)\\])$/\\1/p' configure.ac)
+          {
+            echo "tor $ver"
+            echo "commit         $(echo "$rev" | tr -d '\\"')"
+            echo "build          #${BUILD_NUMBER}"
+            echo "built          $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "platform       linux-amd64"
+            echo "gnu build-id   $id_bin"
+            echo
+            echo "files"
+            for f in "$bin" "$bin.debug"; do
+              printf '  %-46s %s\\n' "$(basename "$f")" \
+                "$(du -h "$f" | cut -f1)"
+            done
+            echo
+            echo "checks that ran on this binary"
+            echo "  hardening      RELRO, BIND_NOW, stack canary, NX, PIE"
+            echo "  semantic       scripts/coccinelle, practracker"
+            echo "  sanitizers     ${RUN_SANITIZERS}"
+            echo "  fuzzing        ${FUZZ_MINUTES} minutes per harness"
+            echo "  chutney        ${RUN_CHUTNEY}"
+          } > artifacts/BUILDINFO-${BUILD_NUMBER}.txt
+          cat artifacts/BUILDINFO-${BUILD_NUMBER}.txt
+
+          # Handed to the Groovy side, which cannot read the shell's variables.
+          {
+            echo "TOR_VERSION=$ver"
+            echo "TOR_BUILD_ID=$id_bin"
+            echo "TOR_COMMIT=$(echo "$rev" | tr -d '\\"')"
+          } > .buildinfo.properties
+        '''
+        script {
+          // The build description is the one part of this page a pipeline can
+          // write without script approval, and it shows both on the build page
+          // and beside the entry in the build list. readFile rather than
+          // readProperties: the latter comes from Pipeline Utility Steps, and
+          // this needs three strings, not a plugin.
+          def info = [:]
+          readFile('.buildinfo.properties').eachLine { line ->
+            def kv = line.split('=', 2)
+            if (kv.length == 2) { info[kv[0]] = kv[1] }
+          }
+          currentBuild.description =
+            "tor ${info.TOR_VERSION} @ ${info.TOR_COMMIT}\n" +
+            "linux-amd64, build-id ${info.TOR_BUILD_ID}"
+        }
+      }
+      post {
+        success {
+          // fingerprint ties each file back to the build that made it, which
+          // is what lets someone with a downloaded binary find its log.
+          archiveArtifacts artifacts: 'artifacts/tor-production-linux-amd64-*, artifacts/BUILDINFO-*.txt',
+                           fingerprint: true
+        }
+      }
+    }
+
+    stage('Fuzz corpus regression') {
+      // src/test/test_fuzz_cell.sh says it exists because
+      // fuzz_static_testcases.sh runs only when TOR_FUZZ_CORPORA is set, so
+      // without the corpora repository the parsers get no coverage from
+      // "make check" at all. Set it here and run the whole set: these are
+      // inputs that crashed tor once already.
+      steps {
+        sh '''
+          set -e
+          # First use of STATE_DIR. Check it here rather than let mkdir -p
+          # create a relative path inside the workspace, which distclean would
+          # then remove between builds while the fuzzing stage went on
+          # reporting that it had a corpus.
+          case "${STATE_DIR}" in
+            /*) ;;
+            *) echo "STATE_DIR must be absolute, got '${STATE_DIR}'"; exit 1 ;;
+          esac
+          mkdir -p "${STATE_DIR}"
+          [ -w "${STATE_DIR}" ] || { echo "${STATE_DIR} is not writable"; exit 1; }
+
+          if [ ! -d "$TOR_FUZZ_CORPORA" ]; then
+            git clone --depth 1 \
+              https://gitlab.torproject.org/tpo/core/fuzzing-corpora.git \
+              "$TOR_FUZZ_CORPORA"
+          else
+            git -C "$TOR_FUZZ_CORPORA" pull --ff-only || true
+          fi
+          make -j"${JOBS}" test-fuzz-corpora
+        '''
+      }
+    }
+
+    stage('Sandbox') {
+      // Runs before the sanitizer stages and on their unhardened build.
+      // test_sandbox.c skips its filesystem cases under
+      // ENABLE_FRAGILE_HARDENING, because the sandbox cannot filter open()
+      // while the address sanitizer is reading the process's own state out of
+      // the filesystem. Run this against an ASan tree and it passes without
+      // having tested anything.
+      //
+      // src/lib/sandbox is otherwise compiled everywhere and exercised
+      // nowhere: no GitHub job starts a tor with "Sandbox 1". A syscall added
+      // to a hot path without a matching seccomp rule kills the process at
+      // runtime, on the relays that enabled the sandbox, and never in testing.
+      steps {
+        sh '''
+          set -e
+          if [ "$(uname -s)" != Linux ]; then echo "not Linux; skipping"; exit 0; fi
+          # The group is registered under #ifdef USE_LIBSECCOMP, so its absence
+          # means the build has no sandbox rather than that the tests passed.
+          if ! ./src/test/test --list-tests 2>/dev/null | grep -q '^sandbox/'; then
+            echo "::warning:: built without libseccomp; sandbox untested"; exit 0
+          fi
+          ./src/test/test sandbox/..
+
+          d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+          mkdir -p "$d/data"; chmod 700 "$d/data"
+          cat > "$d/torrc" <<EOF
+DataDirectory $d/data
+SocksPort 0
+ControlPort 0
+Sandbox 1
+Log notice file $d/tor.log
+EOF
+          # A sandboxed tor that survives startup and a config reload has
+          # exercised the syscall set that matters. SIGHUP is the interesting
+          # half: it reopens logs and rereads files after the filter is on.
+          ./src/app/tor -f "$d/torrc" --hush &
+          pid=$!
+          sleep 45
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "sandboxed tor exited early"; cat "$d/tor.log"; exit 1
+          fi
+          kill -HUP "$pid"; sleep 10
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "sandboxed tor died on SIGHUP"; cat "$d/tor.log"; exit 1
+          fi
+          kill "$pid" 2>/dev/null || true
+          if grep -qE '\\[err\\]|Bug:' "$d/tor.log"; then
+            cat "$d/tor.log"; exit 1
+          fi
+          echo "sandbox OK"
+        '''
+      }
+    }
+
+    stage('UBSan') {
+      // Undefined behaviour appears nowhere in .github/workflows/ci.yml.
+      // Signed overflow and misaligned loads in a parser are exploitable and
+      // neither ASan nor TSan reports them.
+      when { expression { params.RUN_SANITIZERS } }
+      steps {
+        sh '''
+          set -e
+          make -s distclean || true
+          ./autogen.sh
+          CC=clang \
+          CFLAGS="-fsanitize=undefined,integer -fno-sanitize-recover=all -O1 -g" \
+          LDFLAGS="-fsanitize=undefined,integer" \
+          ./configure --disable-asciidoc
+          make -j"${JOBS}"
+          make check
+        '''
+      }
+    }
+
+    stage('ASan, leaks on') {
+      // The asan-workqueue job sets ASAN_OPTIONS detect_leaks=0 and runs only
+      // the workqueue tests. Run the full suite with leak detection on: a leak
+      // in a parser reachable from the network is a remote memory exhaustion.
+      when { expression { params.RUN_SANITIZERS } }
+      steps {
+        sh '''
+          set -e
+          make -s distclean || true
+          ./autogen.sh
+          CC=clang ./configure --enable-fragile-hardening --disable-asciidoc
+          make -j"${JOBS}"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 make check
+        '''
+      }
+    }
+
+    stage('Guided fuzzing') {
+      // The eighteen harnesses under src/test/fuzz are the only tests that
+      // generate their own inputs. Fuzzing is bounded by time rather than by
+      // memory, which is what a machine that runs unattended has and a
+      // six-hour GitHub job does not. The corpus lives outside the workspace
+      // so that each run starts from everything the previous ones reached.
+      when { expression { params.FUZZ_MINUTES != '0' } }
+      steps {
+        sh '''
+          set -e
+          make -s distclean || true
+          ./autogen.sh
+          CC=clang ./configure --enable-expensive-hardening --enable-libfuzzer \
+            --disable-asciidoc
+          make -j"${JOBS}"
+
+          mkdir -p "$FUZZ_CORPUS_DIR" artifacts
+          secs=$(( FUZZ_MINUTES * 60 ))
+          rc=0
+          for f in src/test/fuzz/lf-fuzz-*; do
+            [ -x "$f" ] || continue
+            name=$(basename "$f")
+            corpus="$FUZZ_CORPUS_DIR/$name"
+            mkdir -p "$corpus"
+            # Seed a new corpus from the static testcases for the same parser.
+            seed="$TOR_FUZZ_CORPORA/${name#lf-fuzz-}"
+            [ -d "$seed" ] && cp -n "$seed"/* "$corpus"/ 2>/dev/null || true
+            echo "=== $name ==="
+            # A finding sets rc and the loop continues, so one crashing parser
+            # does not deny the remaining harnesses their turn. The input is
+            # written under artifacts/ and archived by the post block.
+            "$f" "$corpus" \
+              -max_total_time="$secs" \
+              -rss_limit_mb="$FUZZ_RSS_MB" \
+              -artifact_prefix=artifacts/"$name"- \
+              -print_final_stats=1 || rc=1
+          done
+          [ "$rc" = 0 ] || echo "at least one harness reported a finding"
+          exit 0
+        '''
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'artifacts/**', allowEmptyArchive: true
+        }
+      }
+    }
+
+    stage('Chutney') {
+      // No GitHub job runs an integration test of any kind: Makefile.am has
+      // test-network and test-network-all and ci.yml calls neither. A local
+      // network is also the cheapest place to observe behaviour across relay
+      // roles, which a single bridge cannot show.
+      when { expression { params.RUN_CHUTNEY } }
+      steps {
+        // Optional in the strongest sense the pipeline can express: opting in
+        // must not be able to turn a good build into a failed one. Chutney
+        // starts a dozen tor processes and waits on real timeouts, so it goes
+        // flaky on a loaded or small host for reasons that say nothing about
+        // the tree. A FAILURE here would also move lastSuccessfulBuild past
+        // this run, and that permalink is what the Linux amd64 artifact is
+        // published under. UNSTABLE keeps the artifact reachable and still
+        // shows the result on the build page.
+        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE',
+                   message: 'chutney did not pass; the rest of the build stands') {
+          sh '''
+            set -e
+            # Match need-chutney-path in Makefile.am rather than testing
+            # CHUTNEY_PATH alone: that target also accepts a chutney checked
+            # out beside the tor tree, and refusing to run in that case would
+            # skip the stage on a machine where chutney is in fact available.
+            if [ ! -d "$CHUTNEY_PATH" ] && \
+               ! { [ -d ../chutney ] && [ -x ../chutney/chutney ]; }; then
+              echo "no chutney in CHUTNEY_PATH or ../chutney; skipping"
+              exit 0
+            fi
+            # Chutney runs real tor processes, so it needs the ordinary build,
+            # not the libfuzzer tree the previous stage left behind.
+            make -s distclean || true
+            ./autogen.sh && ./configure --disable-asciidoc && make -j"${JOBS}"
+            make "${CHUTNEY_TARGET}"
+          '''
+        }
+      }
+      post {
+        // Not "failure": catchError has already turned any failure into
+        // UNSTABLE, so a failure block here would never run and the network
+        // logs would be discarded in exactly the case that needs them.
+        always {
+          archiveArtifacts artifacts: 'test_network_log/**',
+                           allowEmptyArchive: true
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      archiveArtifacts artifacts: 'config.log, artifacts/**, **/*.log',
+                       allowEmptyArchive: true
+    }
+    cleanup {
+      // The sanitizer and libfuzzer trees are each a full build. Leaving them
+      // behind fills the disk in a handful of runs.
+      sh 'make -s distclean || true'
+    }
+  }
+}
