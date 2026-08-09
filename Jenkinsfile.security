@@ -28,7 +28,10 @@ pipeline {
     string(name: 'FUZZ_RSS_MB', defaultValue: '512',
            description: 'libFuzzer -rss_limit_mb. The harness aborts above this.')
     booleanParam(name: 'RUN_CHUTNEY', defaultValue: false,
-                 description: 'Run the chutney network. Needs CHUTNEY_PATH and starts a dozen tor processes.')
+                 description: 'Opt in to the chutney network. Off by default, and it can never fail the build: see the Chutney stage.')
+    choice(name: 'CHUTNEY_TARGET',
+           choices: ['test-network', 'test-network-ipv4', 'test-network-all'],
+           description: 'test-network is the quick pair, bridges+hs-v3 and single-onion-v3-ipv6-md. test-network-all runs every flavor and takes far longer.')
     booleanParam(name: 'RUN_SANITIZERS', defaultValue: true,
                  description: 'UBSan and ASan builds. Each is a full rebuild.')
   }
@@ -380,15 +383,43 @@ EOF
       // roles, which a single bridge cannot show.
       when { expression { params.RUN_CHUTNEY } }
       steps {
-        sh '''
-          set -e
-          if [ -z "$CHUTNEY_PATH" ] || [ ! -d "$CHUTNEY_PATH" ]; then
-            echo "CHUTNEY_PATH unset; skipping"; exit 0
-          fi
-          make -s distclean || true
-          ./autogen.sh && ./configure --disable-asciidoc && make -j"${JOBS}"
-          make test-network-all
-        '''
+        // Optional in the strongest sense the pipeline can express: opting in
+        // must not be able to turn a good build into a failed one. Chutney
+        // starts a dozen tor processes and waits on real timeouts, so it goes
+        // flaky on a loaded or small host for reasons that say nothing about
+        // the tree. A FAILURE here would also move lastSuccessfulBuild past
+        // this run, and that permalink is what the Linux amd64 artifact is
+        // published under. UNSTABLE keeps the artifact reachable and still
+        // shows the result on the build page.
+        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE',
+                   message: 'chutney did not pass; the rest of the build stands') {
+          sh '''
+            set -e
+            # Match need-chutney-path in Makefile.am rather than testing
+            # CHUTNEY_PATH alone: that target also accepts a chutney checked
+            # out beside the tor tree, and refusing to run in that case would
+            # skip the stage on a machine where chutney is in fact available.
+            if [ ! -d "$CHUTNEY_PATH" ] && \
+               ! { [ -d ../chutney ] && [ -x ../chutney/chutney ]; }; then
+              echo "no chutney in CHUTNEY_PATH or ../chutney; skipping"
+              exit 0
+            fi
+            # Chutney runs real tor processes, so it needs the ordinary build,
+            # not the libfuzzer tree the previous stage left behind.
+            make -s distclean || true
+            ./autogen.sh && ./configure --disable-asciidoc && make -j"${JOBS}"
+            make "${CHUTNEY_TARGET}"
+          '''
+        }
+      }
+      post {
+        // Not "failure": catchError has already turned any failure into
+        // UNSTABLE, so a failure block here would never run and the network
+        // logs would be discarded in exactly the case that needs them.
+        always {
+          archiveArtifacts artifacts: 'test_network_log/**',
+                           allowEmptyArchive: true
+        }
       }
     }
   }
