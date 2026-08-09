@@ -383,9 +383,16 @@ EOF
           set -e
           make -s distclean || true
           ./autogen.sh
+          # "undefined" only. clang's "integer" group adds
+          # unsigned-integer-overflow, and unsigned wraparound is defined
+          # behaviour that siphash and the curve25519 code use deliberately.
+          # With -fno-sanitize-recover the first such wrap aborts, so that
+          # group would fail this stage inside working crypto rather than on a
+          # defect. configure also adds -fwrapv, which makes signed overflow
+          # wrap rather than be undefined.
           CC=clang \
-          CFLAGS="-fsanitize=undefined,integer -fno-sanitize-recover=all -O1 -g" \
-          LDFLAGS="-fsanitize=undefined,integer" \
+          CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -O1 -g" \
+          LDFLAGS="-fsanitize=undefined" \
           ./configure --disable-asciidoc
           make -j"${JOBS}"
           make check
