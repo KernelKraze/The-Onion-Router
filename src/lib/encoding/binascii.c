@@ -218,7 +218,6 @@ base64_encode(char *dest, size_t destlen, const char *src, size_t srclen,
               int flags)
 {
   const unsigned char *usrc = (unsigned char *)src;
-  const unsigned char *eous = usrc + srclen;
   char *d = dest;
   uint32_t n = 0;
   size_t linelen = 0;
@@ -227,6 +226,8 @@ base64_encode(char *dest, size_t destlen, const char *src, size_t srclen,
 
   if (!src || !dest)
     return -1;
+
+  const unsigned char *eous = usrc + srclen;
 
   /* Ensure that there is sufficient space, including the NUL. */
   enclen = base64_encode_size(srclen, flags);
