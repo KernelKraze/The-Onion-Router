@@ -13,7 +13,11 @@
         memcpy(p, x, sizeof(x)); \
         p += sizeof(x);          \
     } while (0)
-#define EMIT_U32(p,x) *((uint32_t*)(p)) = x; p += sizeof(uint32_t)
+#define EMIT_U32(p,x) do {           \
+		uint32_t emit_val_ = (x);    \
+		memcpy(p, &emit_val_, sizeof(emit_val_)); \
+		p += sizeof(emit_val_);      \
+	} while (0)
 #define EMIT_IMM32(p,x)                                              \
     EMIT_U32(p, 0x9280000c           |                               \
         ((x <= INT32_MAX) << 30)     |                               \
