@@ -1,0 +1,6 @@
+  o Minor bugfixes (C correctness):
+    - Form the branch displacement in hashx's x86 code generator through an
+      unsigned type. INSTR_BRANCH jumps backwards, so target - pos is a
+      negative ptrdiff_t, and shifting a negative value left is undefined
+      behaviour. Found by UndefinedBehaviorSanitizer. Fixes bug 0000;
+      bugfix on 0.4.8.1-alpha.

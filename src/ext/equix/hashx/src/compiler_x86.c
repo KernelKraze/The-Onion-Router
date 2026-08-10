@@ -149,7 +149,7 @@ bool hashx_compile_x86(const hashx_program* program, uint8_t* code) {
 			break;
 		case INSTR_BRANCH:
 			EMIT_U64(pos, ((uint64_t)instr->imm32) << 32 | 0xc2f7f209);
-			EMIT_U16(pos, ((target - pos) << 8) | 0x74);
+			EMIT_U16(pos, ((uint32_t)(target - pos) << 8) | 0x74);
 			break;
 		default:
 			UNREACHABLE;
