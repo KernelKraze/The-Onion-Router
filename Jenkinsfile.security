@@ -415,11 +415,22 @@ pipeline {
 
           d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
           mkdir -p "$d/data"; chmod 700 "$d/data"
+          # GeoIPFile defaults to the installed path, which a build tree does
+          # not have. config_maybe_load_geoip_files_ retries whenever
+          # geoip_is_loaded() is false, so a missing file means it retries on
+          # SIGHUP, by which point the filter is on and has no interned string
+          # for that path: build 4 logged "sandbox_intern_string(): Bug: No
+          # interned sandbox parameter found for /usr/local/share/tor/geoip".
+          # An installed tor loads geoip before the sandbox and never reaches
+          # that branch, so point at the copies in the tree and test what a
+          # relay does.
           cat > "$d/torrc" <<EOF
 DataDirectory $d/data
 SocksPort 0
 ControlPort 0
 Sandbox 1
+GeoIPFile $(pwd)/src/config/geoip
+GeoIPv6File $(pwd)/src/config/geoip6
 Log notice file $d/tor.log
 EOF
           # A sandboxed tor that survives startup and a config reload has
