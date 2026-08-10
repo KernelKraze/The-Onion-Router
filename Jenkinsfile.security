@@ -345,10 +345,23 @@ pipeline {
           mkdir -p "${STATE_DIR}"
           [ -w "${STATE_DIR}" ] || { echo "${STATE_DIR} is not writable"; exit 1; }
 
+          # Reaching gitlab.torproject.org is infrastructure, and a host that
+          # cannot is not reporting anything about the tree. Build 2 could
+          # not ("Recv failure: Connection reset by peer") and took the
+          # sandbox, both sanitizers and the fuzzing down with it. A corpus
+          # that is present and then fails test-fuzz-corpora is a different
+          # matter: those inputs crashed tor once already, so that stays
+          # fatal.
           if [ ! -d "$TOR_FUZZ_CORPORA" ]; then
-            git clone --depth 1 \
-              https://gitlab.torproject.org/tpo/core/fuzzing-corpora.git \
-              "$TOR_FUZZ_CORPORA"
+            if ! git clone --depth 1 \
+                 https://gitlab.torproject.org/tpo/core/fuzzing-corpora.git \
+                 "$TOR_FUZZ_CORPORA"; then
+              # A failed clone leaves a directory behind, and the next build
+              # would take that for a checkout and run against no testcases.
+              rm -rf "$TOR_FUZZ_CORPORA"
+              echo "cannot reach the corpora repository; skipping"
+              exit 0
+            fi
           else
             git -C "$TOR_FUZZ_CORPORA" pull --ff-only || true
           fi
