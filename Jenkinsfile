@@ -9,6 +9,13 @@
 // with check-spaces, check-changes, check-includes and shellcheck, so this is
 // the same test surface .github/workflows/ci.yml has.
 //
+// The binary this publishes comes off a development branch, not off upstream
+// tor. That branch carries changes that are not upstream, and they go
+// upstream one at a time as each is ready; some are there to be measured
+// rather than kept. Whoever downloads the artifact is running a fork, so the
+// publish stage writes that into BUILDINFO beside the binary rather than
+// leaving it to be inferred from the version string.
+//
 // The name is Jenkinsfile so Script Path can stay at its default.
 
 pipeline {
@@ -119,6 +126,12 @@ pipeline {
             done
             echo
             echo "tested with    make check"
+            echo
+            echo "about this build"
+            echo "  A development branch of tor, not upstream tor. It carries"
+            echo "  changes that are not upstream; each one goes upstream when"
+            echo "  it is ready, and some are here to be measured rather than"
+            echo "  kept. Unsigned, and not a release."
           } > "artifacts/BUILDINFO-${BUILD_NUMBER}.txt"
           cat "artifacts/BUILDINFO-${BUILD_NUMBER}.txt"
 
