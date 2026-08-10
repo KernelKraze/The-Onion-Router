@@ -6,7 +6,7 @@
       CFLAGS_BUGTRAP reached the compiler with AddressSanitizer alone.
       Turn off -fsanitize=function along with it, because it reads a type
       signature that the machine code hashx generates does not carry.
-      Fixes bug XXXXX; bugfix on 0.4.1.1-alpha.
+      Fixes bug 0000; bugfix on 0.4.1.1-alpha.
     - Consult the -fsanitize=undefined link result when reporting that
       -fsanitize=undefined cannot be linked, rather than the
-      -fsanitize=address one. Fixes bug XXXXX; bugfix on 0.2.9.1-alpha.
+      -fsanitize=address one. Fixes bug 0000; bugfix on 0.2.9.1-alpha.

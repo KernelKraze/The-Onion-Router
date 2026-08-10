@@ -5,4 +5,4 @@
       forming the address is undefined behavior when n_chan is NULL, and
       node_get_by_id() would go on to copy DIGEST_LEN bytes through that
       address once the nodelist held an entry. Found by
-      UndefinedBehaviorSanitizer. Fixes bug XXXXX; bugfix on 0.0.8pre1.
+      UndefinedBehaviorSanitizer. Fixes bug 0000; bugfix on 0.0.8pre1.

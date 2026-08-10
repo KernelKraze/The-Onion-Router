@@ -2,4 +2,4 @@
     - Do not pass a NULL body to memcpy() when encoding or copying a relay
       message of zero length. memcpy() declares both pointers non-null, so
       the call was undefined behaviour even with a length of zero. Found by
-      UndefinedBehaviorSanitizer. Fixes bug XXXXX; bugfix on 0.4.9.3-alpha.
+      UndefinedBehaviorSanitizer. Fixes bug 0000; bugfix on 0.4.9.3-alpha.

@@ -3,4 +3,4 @@
       rather than through a pointer of the immediate's own type. x86
       instructions vary in length, so the destination is rarely aligned,
       and the store was undefined behaviour. Found by
-      UndefinedBehaviorSanitizer. Fixes bug XXXXX; bugfix on 0.4.8.1-alpha.
+      UndefinedBehaviorSanitizer. Fixes bug 0000; bugfix on 0.4.8.1-alpha.

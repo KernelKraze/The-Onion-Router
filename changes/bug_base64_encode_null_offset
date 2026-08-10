@@ -2,5 +2,5 @@
     - Compute the end of the base64 input after checking that the input
       pointer is non-NULL. Adding a nonzero length to a NULL pointer is
       undefined behaviour, even though the result is never dereferenced.
-      Found by UndefinedBehaviorSanitizer. Fixes bug XXXXX; bugfix on
+      Found by UndefinedBehaviorSanitizer. Fixes bug 0000; bugfix on
       0.2.7.3-rc.
