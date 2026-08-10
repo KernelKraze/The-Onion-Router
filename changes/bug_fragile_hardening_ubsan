@@ -1,0 +1,10 @@
+  o Minor bugfixes (hardening):
+    - Restore UndefinedBehaviorSanitizer under --enable-fragile-hardening.
+      The check that adds -fno-sanitize=float-divide-by-zero assigned
+      CFLAGS_UBSAN rather than appending to it, so it replaced the
+      -fsanitize=undefined that the previous check had set, and
+      CFLAGS_BUGTRAP reached the compiler with AddressSanitizer alone.
+      Fixes bug XXXXX; bugfix on 0.4.1.1-alpha.
+    - Consult the -fsanitize=undefined link result when reporting that
+      -fsanitize=undefined cannot be linked, rather than the
+      -fsanitize=address one. Fixes bug XXXXX; bugfix on 0.2.9.1-alpha.
