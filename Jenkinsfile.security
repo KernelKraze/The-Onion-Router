@@ -477,7 +477,23 @@ EOF
           LDFLAGS="-fsanitize=undefined" \
           ./configure --disable-asciidoc
           make -j"${JOBS:-2}"
-          make check
+
+          # automake prints PASS or FAIL and sends each test's output to its
+          # own .log, so builds 3 through 5 reported seven failing tests and
+          # not one "runtime error:" line, while the diagnostics that name the
+          # file and the operation sat in files the console never showed. Put
+          # them on the console: the question this stage asks is what the
+          # sanitizer found, and reading it should not need an artifact
+          # download.
+          if ! make check; then
+            echo "=== runtime errors ==="
+            grep -h -A4 'runtime error:' test-suite.log src/test/*.log \
+              2>/dev/null | head -200 || true
+            echo "=== failing tests ==="
+            grep -hE '^ *FAIL|FAILED]' test-suite.log \
+              src/test/*.log 2>/dev/null | head -60 || true
+            exit 1
+          fi
         '''
       }
       post {
