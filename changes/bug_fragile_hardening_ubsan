@@ -4,6 +4,8 @@
       CFLAGS_UBSAN rather than appending to it, so it replaced the
       -fsanitize=undefined that the previous check had set, and
       CFLAGS_BUGTRAP reached the compiler with AddressSanitizer alone.
+      Turn off -fsanitize=function along with it, because it reads a type
+      signature that the machine code hashx generates does not carry.
       Fixes bug XXXXX; bugfix on 0.4.1.1-alpha.
     - Consult the -fsanitize=undefined link result when reporting that
       -fsanitize=undefined cannot be linked, rather than the

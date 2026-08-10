@@ -1418,6 +1418,15 @@ if test "$fragile_hardening" = "yes"; then
       AC_MSG_ERROR([The compiler supports -fno-sanitize=float-divide-by-zero, but for some reason I was not able to link when using it. Are you missing run-time support? With GCC you need libasan.*, and with Clang you need libclang_rt.ubsan*])
     fi
 
+   dnl -fsanitize=function reads a type signature stored before a function's
+   dnl entry point.  hashx.c calls the buffer that hashx_compile() filled with
+   dnl machine code, which has no such signature, so the check reads the page
+   dnl before an mmap and crypto/hashx dies with SIGSEGV.
+   TOR_TRY_COMPILE_WITH_CFLAGS([-fno-sanitize=function], also_link, CFLAGS_UBSAN="$CFLAGS_UBSAN -fno-sanitize=function", true)
+    if test "$tor_cv_cflags__fno_sanitize_function" = "yes" && test "$tor_can_link__fno_sanitize_function" != "yes"; then
+      AC_MSG_ERROR([The compiler supports -fno-sanitize=function, but for some reason I was not able to link when using it. Are you missing run-time support? With GCC you need libubsan.*, and with Clang you need libclang_rt.ubsan*])
+    fi
+
 TOR_CHECK_CFLAGS([-fno-omit-frame-pointer])
 fi
 
