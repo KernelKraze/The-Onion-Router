@@ -399,10 +399,17 @@ pipeline {
         sh '''
           set -e
           if [ "$(uname -s)" != Linux ]; then echo "not Linux; skipping"; exit 0; fi
-          # The group is registered under #ifdef USE_LIBSECCOMP, so its absence
-          # means the build has no sandbox rather than that the tests passed.
-          if ! ./src/test/test --list-tests 2>/dev/null | grep -q '^sandbox/'; then
-            echo "::warning:: built without libseccomp; sandbox untested"; exit 0
+          # sandbox.h defines USE_LIBSECCOMP under HAVE_SECCOMP_H and
+          # __linux__, and test.c registers the sandbox group under
+          # USE_LIBSECCOMP, so orconfig.h answers whether the group exists.
+          #
+          # Reading it from "test --list-tests" does not: that prints one
+          # indented test name per line and no group prefix, so a grep for
+          # "^sandbox/" matches nothing on any build. Build 3 took that for a
+          # missing libseccomp and skipped, on a tree whose own configure had
+          # reported "libseccomp: yes" and linked -lseccomp.
+          if ! grep -q '^#define HAVE_SECCOMP_H 1' orconfig.h; then
+            echo "::warning:: built without seccomp.h; sandbox untested"; exit 0
           fi
           ./src/test/test sandbox/..
 
@@ -462,6 +469,17 @@ EOF
           make check
         '''
       }
+      post {
+        // automake sends each test's output to its own .log and prints only
+        // PASS or FAIL, so the console says which test failed and never why.
+        // Build 3 reported seven failures under UBSan and not one
+        // "runtime error:" line, because the diagnostics were in these files.
+        // distclean removes them, so they have to be taken here.
+        failure {
+          archiveArtifacts artifacts: 'test-suite.log, src/test/*.log, config.log',
+                           allowEmptyArchive: true
+        }
+      }
     }
 
     stage('ASan, leaks on') {
@@ -478,6 +496,14 @@ EOF
           make -j"${JOBS:-2}"
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 make check
         '''
+      }
+      post {
+        // As in the UBSan stage: the leak reports are in the per-test logs,
+        // not on the console.
+        failure {
+          archiveArtifacts artifacts: 'test-suite.log, src/test/*.log, config.log',
+                           allowEmptyArchive: true
+        }
       }
     }
 
