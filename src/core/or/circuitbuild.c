@@ -2749,9 +2749,10 @@ client_circ_negotiation_message(const extend_info_t *ei,
   }
 
   size_t n_fields = trn_extension_getlen_fields(ext);
-  qsort(trn_extension_getarray_fields(ext),
-        n_fields, sizeof(trn_extension_field_t *),
-        ext_cmp);
+  if (n_fields)
+    qsort(trn_extension_getarray_fields(ext),
+          n_fields, sizeof(trn_extension_field_t *),
+          ext_cmp);
 
   trn_extension_set_num(ext, n_fields);
 

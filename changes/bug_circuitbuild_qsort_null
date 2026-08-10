@@ -1,0 +1,5 @@
+  o Minor bugfixes (C correctness):
+    - Do not call qsort() on the extension field array when the array is
+      empty. The array pointer is NULL in that case and qsort() declares it
+      non-null, so the call was undefined behaviour. Found by
+      UndefinedBehaviorSanitizer. Fixes bug XXXXX; bugfix on 0.4.9.3-alpha.
