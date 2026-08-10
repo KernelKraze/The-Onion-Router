@@ -30,6 +30,9 @@ pipeline {
   parameters {
     string(name: 'STATE_DIR', defaultValue: '/var/lib/jenkins/tor-ci-state',
            description: 'Absolute path for state that outlives the workspace: the fuzzing corpora checkout and the accumulated fuzz corpus. Must be writable by the user Jenkins runs as.')
+    string(name: 'FUZZ_CORPORA_URL',
+           defaultValue: 'https://git.free-proletariat.dpdns.org/Overlay-Network/fuzzing-corpora.git',
+           description: 'Where to fetch the fuzzing corpora from. A mirror of gitlab.torproject.org/tpo/core/fuzzing-corpora, whose refs it matches.')
     string(name: 'JOBS', defaultValue: '2',
            description: 'make -j value. Each cc1 on the larger tor files takes a few hundred MB.')
     string(name: 'FUZZ_MINUTES', defaultValue: '20',
@@ -351,17 +354,21 @@ pipeline {
           mkdir -p "${STATE_DIR}"
           [ -w "${STATE_DIR}" ] || { echo "${STATE_DIR} is not writable"; exit 1; }
 
-          # Reaching gitlab.torproject.org is infrastructure, and a host that
-          # cannot is not reporting anything about the tree. Build 2 could
-          # not ("Recv failure: Connection reset by peer") and took the
-          # sandbox, both sanitizers and the fuzzing down with it. A corpus
-          # that is present and then fails test-fuzz-corpora is a different
-          # matter: those inputs crashed tor once already, so that stays
-          # fatal.
+          # FUZZ_CORPORA_URL points at a mirror. Build 2 clone
+          # gitlab.torproject.org and got "Recv failure: Connection reset by
+          # peer", which is also what that host answers from the machine this
+          # was written on: the connection is reset rather than refused or
+          # timed out, and it succeeds over Tor. The mirror carries the same
+          # two refs, a6b615a5 on main and d21f11db on master.
+          #
+          # Reaching a git host is infrastructure, and a host that cannot is
+          # not reporting anything about the tree, so a failed clone skips.
+          # A corpus that is present and then fails test-fuzz-corpora is a
+          # different matter: those inputs crashed tor once already, so that
+          # stays fatal.
+          url="${FUZZ_CORPORA_URL:-https://git.free-proletariat.dpdns.org/Overlay-Network/fuzzing-corpora.git}"
           if [ ! -d "$TOR_FUZZ_CORPORA" ]; then
-            if ! git clone --depth 1 \
-                 https://gitlab.torproject.org/tpo/core/fuzzing-corpora.git \
-                 "$TOR_FUZZ_CORPORA"; then
+            if ! git clone --depth 1 "$url" "$TOR_FUZZ_CORPORA"; then
               # A failed clone leaves a directory behind, and the next build
               # would take that for a checkout and run against no testcases.
               rm -rf "$TOR_FUZZ_CORPORA"
