@@ -472,8 +472,14 @@ EOF
           # group would fail this stage inside working crypto rather than on a
           # defect. configure also adds -fwrapv, which makes signed overflow
           # wrap rather than be undefined.
+          #
+          # The ignore list holds one entry, for the function check inside
+          # trunnel_dynarray_setlen(). Without it that one call fails five
+          # link-handshake tests on every build, this stage exits 1, and the
+          # ASan, fuzzing and Chutney stages after it are skipped. The file
+          # says why the call cannot be corrected here.
           CC=clang \
-          CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -O1 -g" \
+          CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fsanitize-ignorelist=$(pwd)/scripts/ci/ubsan-ignorelist.txt -O1 -g" \
           LDFLAGS="-fsanitize=undefined" \
           ./configure --disable-asciidoc
           make -j"${JOBS:-2}"

@@ -1,0 +1,26 @@
+# UndefinedBehaviorSanitizer special case list for the UBSan stage in
+# Jenkinsfile.security.  Passed with -fsanitize-ignorelist=.
+#
+# trunnel-impl.h:235 declares trunnel_free_fn_t as void (*)(void *).  The
+# code the trunnel tool generates casts each element type's own free
+# function to it and hands that to trunnel_dynarray_setlen():
+# certs_cell_cert_free, ed25519_cert_extension_free, link_specifier_free,
+# netinfo_addr_free, trn_extension_field_free and trn_subproto_request_free
+# each take a pointer to their own struct, not void *.  Calling a function
+# through a pointer to an incompatible function type is undefined behaviour
+# (C11 6.5.2.2p9), so -fsanitize=function reports trunnel.c:207 once per
+# element type any test frees.  On every ABI tor supports a pointer to
+# struct and a void * are passed identically, so the call itself does what
+# the generated code intends.
+#
+# Neither side can be corrected in this tree: src/ext/trunnel is maintained
+# upstream and src/trunnel is generated output.  Regenerating it would need
+# a change to the trunnel tool.
+#
+# The section header restricts this to the function check.  Every other
+# UndefinedBehaviorSanitizer check inside trunnel_dynarray_setlen(), the
+# misaligned loads and the pointer arithmetic among them, stays on, and a
+# report from anywhere else still fails the stage.
+
+[function]
+fun:trunnel_dynarray_setlen
