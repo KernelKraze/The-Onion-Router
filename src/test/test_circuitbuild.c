@@ -3,6 +3,7 @@
  * Copyright (c) 2007-2021, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
+#define CHANNEL_OBJECT_PRIVATE
 #define CIRCUITBUILD_PRIVATE
 #define CIRCUITLIST_PRIVATE
 #define ENTRYNODES_PRIVATE
@@ -1699,6 +1700,14 @@ test_circuit_send_next_onion_skin(void *arg)
                                                       &ipv4_hop,
                                                       &ipv4_hop};
 
+  /* channel_init() assigns scalars and allocates nothing, and circuit_free_()
+   * does not reach n_chan, so one channel with static storage serves both
+   * circuits and needs no teardown. */
+  static channel_t fake_chan;
+  memset(&fake_chan, 0, sizeof(fake_chan));
+  channel_init(&fake_chan);
+  fake_chan.state = CHANNEL_STATE_OPEN;
+
   mock_circuit_deliver_create_cell_expect_direct = false;
   MOCK(circuit_deliver_create_cell, mock_circuit_deliver_create_cell);
   server = 0;
@@ -1713,6 +1722,9 @@ test_circuit_send_next_onion_skin(void *arg)
   tt_ptr_op(origin_circ, OP_NE, NULL);
   /* Skip some of the multi-hop checks */
   origin_circ->build_state->onehop_tunnel = 1;
+  /* A direct connection has a channel, and circuit_send_first_onion_skin()
+   * reads the identity digest off it. */
+  TO_CIRCUIT(origin_circ)->n_chan = &fake_chan;
   /* This is a direct connection */
   mock_circuit_deliver_create_cell_expect_direct = true;
   tt_int_op(circuit_send_next_onion_skin(origin_circ), OP_EQ, 0);
@@ -1726,6 +1738,7 @@ test_circuit_send_next_onion_skin(void *arg)
                                         &single_fakehop);
   tt_ptr_op(origin_circ, OP_NE, NULL);
   origin_circ->build_state->onehop_tunnel = 1;
+  TO_CIRCUIT(origin_circ)->n_chan = &fake_chan;
   mock_circuit_deliver_create_cell_expect_direct = true;
   tt_int_op(circuit_send_next_onion_skin(origin_circ), OP_EQ, 0);
 

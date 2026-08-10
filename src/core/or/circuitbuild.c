@@ -997,6 +997,13 @@ circuit_send_first_onion_skin(origin_circuit_t *circ)
 
   log_debug(LD_CIRC,"First skin; sending create cell.");
 
+  /* Every path into this function assigns n_chan first, and the three reads
+   * below assume it. Say so here rather than compute an address inside a null
+   * pointer: node_get_by_id() would go on to read a digest through it as soon
+   * as the nodelist is non-empty. */
+  if (BUG(!circ->base_.n_chan))
+    return - END_CIRC_REASON_INTERNAL;
+
   if (circ->build_state->onehop_tunnel) {
     control_event_bootstrap(BOOTSTRAP_STATUS_ONEHOP_CREATE, 0);
   } else {
