@@ -17,9 +17,14 @@
 		p += sizeof(x);          \
 	} while (0)
 #define EMIT_BYTE(p,x) *((p)++) = x
-#define EMIT_U16(p,x) *((uint16_t*)(p)) = x; p += sizeof(uint16_t)
-#define EMIT_U32(p,x) *((uint32_t*)(p)) = x; p += sizeof(uint32_t)
-#define EMIT_U64(p,x) *((uint64_t*)(p)) = x; p += sizeof(uint64_t)
+#define EMIT_UINT(p,type,x) do {     \
+		type emit_val_ = (type)(x);  \
+		memcpy(p, &emit_val_, sizeof(emit_val_)); \
+		p += sizeof(emit_val_);      \
+	} while (0)
+#define EMIT_U16(p,x) EMIT_UINT(p, uint16_t, x)
+#define EMIT_U32(p,x) EMIT_UINT(p, uint32_t, x)
+#define EMIT_U64(p,x) EMIT_UINT(p, uint64_t, x)
 
 #define GEN_SIB(scale, index, base) ((scale << 6) | (index << 3) | base)
 
