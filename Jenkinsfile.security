@@ -313,14 +313,20 @@ pipeline {
             "tor ${info.TOR_VERSION} @ ${info.TOR_COMMIT}\n" +
             "linux-amd64, build-id ${info.TOR_BUILD_ID}"
         }
-      }
-      post {
-        success {
-          // fingerprint ties each file back to the build that made it, which
-          // is what lets someone with a downloaded binary find its log.
-          archiveArtifacts artifacts: 'artifacts/tor-production-linux-amd64-*, artifacts/BUILDINFO-*.txt',
-                           fingerprint: true
-        }
+        // Archived from steps rather than from post { success }. A stage's
+        // success condition reads the build status, and the catchError in
+        // Semantic patches has already set that to UNSTABLE by the time this
+        // stage runs, so post { success } never fires. Build 2 archived
+        // nothing here; its files reached the build record only through the
+        // pipeline-level post { failure }, and a build that ends UNSTABLE
+        // rather than FAILURE would have archived neither.
+        //
+        // As the last step instead: unreachable if the sh above failed, and
+        // reached whatever the build status is if it did not. fingerprint
+        // ties each file back to the build that made it, which is what lets
+        // someone holding a downloaded binary find its log.
+        archiveArtifacts artifacts: 'artifacts/tor-production-linux-amd64-*, artifacts/BUILDINFO-*.txt',
+                         fingerprint: true
       }
     }
 
