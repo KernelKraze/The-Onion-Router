@@ -74,7 +74,8 @@ relay_msg_copy(const relay_msg_t *msg)
 
   memcpy(new_msg, msg, sizeof(*msg));
   new_msg->body = body;
-  memcpy(body, msg->body, msg->length);
+  if (msg->length)
+    memcpy(body, msg->body, msg->length);
 
   return new_msg;
 }
@@ -116,7 +117,8 @@ encode_v0_cell(const relay_msg_t *msg,
   out[V0_CMD_OFFSET] = (uint8_t) msg->command;
   set_uint16(out+V0_STREAM_ID_OFFSET, htons(msg->stream_id));
   set_uint16(out+V0_LEN_OFFSET, htons(msg->length));
-  memcpy(out + RELAY_HEADER_SIZE_V0, msg->body, msg->length);
+  if (msg->length)
+    memcpy(out + RELAY_HEADER_SIZE_V0, msg->body, msg->length);
   relay_cell_pad(cell_out, RELAY_HEADER_SIZE_V0 + msg->length);
 
   return 0;
@@ -153,7 +155,8 @@ encode_v1_cell(const relay_msg_t *msg,
     payload_offset = V1_PAYLOAD_OFFSET_NO_STREAM_ID;
   }
 
-  memcpy(out + payload_offset, msg->body, msg->length);
+  if (msg->length)
+    memcpy(out + payload_offset, msg->body, msg->length);
   relay_cell_pad(cell_out, payload_offset + msg->length);
   return 0;
 }
