@@ -805,7 +805,7 @@ jobs:
           retention-days: 30
 
   publish-pre-release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/ci/github-actions'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/ci/pipelines'
     needs: [build-test, tsan-workqueue, asan-workqueue, windows-mingw,
             raspberry-pi, coverage]
     runs-on: ubuntu-24.04
@@ -854,7 +854,7 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: "Pre-release ${{ env.RELEASE_TAG }}"
           body: |
-            Automated pre-release from ci/github-actions branch.
+            Automated pre-release from the ci/pipelines branch.
 
             Built from ${{ env.SHORT_SHA }}. Every binary here carries that string: `tor --version` prints `(git-${{ env.SHORT_SHA }})`, so a binary can always be matched back to its source.
 
